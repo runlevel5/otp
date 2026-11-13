@@ -648,3 +648,474 @@ void BeamModuleAssembler::emit_send() {
 void BeamModuleAssembler::emit_nif_start() {
     /* load time only instruction */
 }
+
+void BeamGlobalAssembler::emit_bif_nif_epilogue(void) {
+    Label check_trap = a.new_label(), trap = a.new_label(),
+          error = a.new_label();
+
+#ifdef ERTS_MSACC_EXTENDED_STATES
+    {
+        Label skip_msacc = a.new_label();
+
+        a.ld(TMP1, erts_msacc_cache);
+        cmp(TMP1, 0);
+        a.beq(skip_msacc);
+
+        /* The values of the X registers are in the X register array,
+         * so we can use XREG0 to save the contents of ARG1 during the
+         * call. */
+        a.mr(XREG0, ARG1);
+        a.ld(ARG1, erts_msacc_cache);
+        mov_imm(ARG2, ERTS_MSACC_STATE_EMULATOR);
+        mov_imm(ARG3, 1);
+        runtime_call<void (*)(ErtsMsAcc *, Uint, int),
+                     erts_msacc_set_state_m__>();
+        a.mr(ARG1, XREG0);
+
+        a.bind(skip_msacc);
+    }
+#endif
+
+    /* Another process may have loaded new code and somehow notified us through
+     * this call, so we must update the active code index. */
+    emit_leave_runtime<Update::eStack | Update::eHeap | Update::eXRegs |
+                       Update::eReductions | Update::eCodeIndex>();
+
+    emit_branch_if_not_value(ARG1, check_trap);
+
+    comment("Do return and dispatch to it");
+    a.mr(XREG0, ARG1);
+
+    emit_leave_erlang_frame();
+
+    if (erts_alcu_enable_code_atags) {
+        /* See emit_i_test_yield. */
+        a.mflr(LR_TMP);
+        a.std(LR_TMP, ppc::Mem(c_p, offsetof(Process, i)));
+    }
+
+    a.blr();
+
+    a.bind(check_trap);
+    a.ld(TMP1, ppc::Mem(c_p, offsetof(Process, freason)));
+    cmp(TMP1, TRAP);
+    a.bne(error);
+    {
+        comment("yield");
+
+        comment("test trap to hibernate");
+        ERTS_CT_ASSERT(Support::is_uint_n<15>(F_HIBERNATE_SCHED));
+        a.lwz(TMP1, ppc::Mem(c_p, offsetof(Process, flags)));
+        a.andi_rc(LR_TMP, TMP1, imm(F_HIBERNATE_SCHED));
+        a.beq(trap);
+
+        comment("do hibernate trap");
+        a.li(LR_TMP, imm(~F_HIBERNATE_SCHED));
+        a.and_(TMP1, TMP1, LR_TMP);
+        a.stw(TMP1, ppc::Mem(c_p, offsetof(Process, flags)));
+        a.b(labels[do_schedule]);
+    }
+
+    a.bind(trap);
+    {
+        comment("do normal trap");
+
+        /* The BIF_TRAP macros all set up c_p->arity and c_p->current, so we
+         * can use a simplified context switch. */
+        a.ld(ARG3, ppc::Mem(c_p, offsetof(Process, i)));
+        a.b(labels[context_switch_simplified]);
+    }
+
+    a.bind(error);
+    {
+        a.mr(ARG2, E);
+
+        emit_enter_runtime();
+
+        a.mr(ARG1, c_p);
+        runtime_call<ErtsCodePtr (*)(const Process *, const Eterm *),
+                     erts_printable_return_address>();
+
+        emit_leave_runtime();
+
+        a.mr(ARG2, ARG1);
+        a.ld(ARG4, ppc::Mem(c_p, offsetof(Process, current)));
+        a.b(labels[raise_exception_shared]);
+    }
+}
+
+/* Used by call_bif, dispatch_bif, and export_trampoline.
+ *
+ * Note that we don't check reductions here as we may have jumped here through
+ * interpreted code (e.g. an ErtsNativeFunc or export entry) and it's very
+ * tricky to yield back. Reductions are checked in module code instead.
+ *
+ * ARG2 = BIF MFA
+ * ARG3 = I (rip), doesn't need to point past an MFA
+ * ARG4 = function to be called */
+void BeamGlobalAssembler::emit_call_bif_shared(void) {
+    /* "Heavy" BIFs need up-to-date values for `c_p->i`, `c_p->current`, and
+     * `c_p->arity`. */
+
+    emit_enter_runtime_frame();
+    a.std(ARG2, ppc::Mem(c_p, offsetof(Process, current)));
+    /* `call_bif` wants arity in ARG5. */
+    a.ld(ARG5, ppc::Mem(ARG2, offsetof(ErtsCodeMFA, arity)));
+    a.stb(ARG5, ppc::Mem(c_p, offsetof(Process, arity)));
+    a.std(ARG3, ppc::Mem(c_p, offsetof(Process, i)));
+
+    /* The corresponding leave can be found in the epilogue. */
+    emit_enter_runtime<Update::eStack | Update::eHeap | Update::eXRegs |
+                       Update::eReductions>();
+
+#ifdef ERTS_MSACC_EXTENDED_STATES
+    {
+        Label skip_msacc = a.new_label();
+
+        a.ld(TMP1, erts_msacc_cache);
+        cmp(TMP1, 0);
+        a.beq(skip_msacc);
+
+        /* The values of the X registers are in the X register array, so we can
+         * use XREG0 and XREG1 to save the contents of the ARG* registers
+         * during the call. */
+        a.mr(XREG0, ARG3);
+        a.mr(XREG1, ARG5);
+
+        a.ld(ARG1, erts_msacc_cache);
+        a.ld(ARG2, ppc::Mem(ARG2, offsetof(ErtsCodeMFA, module)));
+        a.mr(ARG3, ARG4);
+        runtime_call<const void *(*)(ErtsMsAcc *, Eterm, const void *),
+                     erts_msacc_set_bif_state>();
+        a.mr(ARG4, ARG1);
+
+        a.mr(ARG3, XREG0);
+        a.mr(ARG5, XREG1);
+
+        a.bind(skip_msacc);
+    }
+#endif
+
+    a.mr(ARG1, c_p);
+    load_x_reg_array(ARG2);
+    /* ARG3 (I), ARG4 (func), and ARG5 (arity) have already been provided. */
+    runtime_call<Eterm (*)(Process *, Eterm *, ErtsCodePtr, ErtsBifFunc, Uint),
+                 beam_jit_call_bif>();
+
+#ifdef ERTS_MSACC_EXTENDED_STATES
+    /* The values of the X registers are in the X register array, so we can use
+     * XREG0 to save the contents of ARG1 during the call. */
+    a.mr(XREG0, ARG1);
+    lea(ARG1, erts_msacc_cache);
+    runtime_call<void (*)(ErtsMsAcc **), erts_msacc_update_cache>();
+    a.mr(ARG1, XREG0);
+#endif
+
+    emit_leave_runtime_frame();
+    emit_bif_nif_epilogue();
+}
+
+void BeamGlobalAssembler::emit_dispatch_bif(void) {
+    /* c_p->i points into the trampoline of a ErtsNativeFunc, right after the
+     * `info` structure. */
+    a.ld(ARG3, ppc::Mem(c_p, offsetof(Process, i)));
+
+    ERTS_CT_ASSERT(offsetof(ErtsNativeFunc, trampoline.call_bif_nif) ==
+                   sizeof(ErtsCodeInfo));
+
+    ssize_t mfa_offset = offsetof(ErtsNativeFunc, trampoline.call_bif_nif) -
+                         offsetof(ErtsNativeFunc, trampoline.info.mfa);
+
+    sub(ARG2, ARG3, mfa_offset);
+
+    ssize_t dfunc_offset = offsetof(ErtsNativeFunc, trampoline.dfunc) -
+                           offsetof(ErtsNativeFunc, trampoline.call_bif_nif);
+    a.ld(ARG4, ppc::Mem(ARG3, dfunc_offset));
+
+    a.b(labels[call_bif_shared]);
+}
+
+/* This is only used for opcode compatibility with the interpreter, it's never
+ * actually called. */
+void BeamModuleAssembler::emit_call_bif(const ArgWord &Func) {
+    (void)Func;
+
+    emit_nyi("emit_call_bif");
+}
+
+void BeamModuleAssembler::emit_call_bif_mfa(const ArgAtom &M,
+                                            const ArgAtom &F,
+                                            const ArgWord &A) {
+    const Export *e;
+    UWord func;
+
+    e = erts_active_export_entry(M.get(), F.get(), A.get());
+    ASSERT(e != NULL && e->bif_number != -1);
+
+    func = (UWord)bif_table[e->bif_number].f;
+
+    emit_adr(ARG3, current_label);
+    sub(ARG2, ARG3, sizeof(ErtsCodeMFA));
+    comment("HBIF: %T:%T/%d",
+            e->info.mfa.module,
+            e->info.mfa.function,
+            A.get());
+    mov_imm(ARG4, func);
+
+    a.b(resolve_fragment(ga->get_call_bif_shared(), disp32MB));
+}
+
+void BeamGlobalAssembler::emit_call_nif_early() {
+    a.mflr(ARG2);
+    sub(ARG2, ARG2, BEAM_ASM_BP_RETURN_OFFSET + sizeof(ErtsCodeInfo));
+
+    emit_enter_runtime();
+
+    a.mr(ARG1, c_p);
+    runtime_call<ErtsCodePtr (*)(Process *, const ErtsCodeInfo *),
+                 erts_call_nif_early>();
+
+    emit_leave_runtime();
+
+    /* Emulate `emit_call_nif`, loading the current (phony) instruction
+     * pointer into ARG3.
+     *
+     * Note that we "inherit" the frame that was pushed to the stack prior to
+     * running the breakpoint instruction, discarding the current content of
+     * LR. */
+    a.mr(ARG3, ARG1);
+    a.b(labels[call_nif_shared]);
+}
+
+/* Used by call_nif, call_nif_early, and dispatch_nif.
+ *
+ * Note that we don't check reductions here as we may have jumped here through
+ * interpreted code (e.g. an ErtsNativeFunc or export entry) and it's very
+ * tricky to yield back. Reductions are checked in module code instead.
+ *
+ * ARG3 = current I, just past the end of an ErtsCodeInfo. */
+void BeamGlobalAssembler::emit_call_nif_shared(void) {
+    /* The corresponding leave can be found in the epilogue. */
+    emit_enter_runtime<Update::eStack | Update::eHeap | Update::eXRegs |
+                       Update::eReductions>();
+
+#ifdef ERTS_MSACC_EXTENDED_STATES
+    {
+        Label skip_msacc = a.new_label();
+
+        a.ld(TMP1, erts_msacc_cache);
+        cmp(TMP1, 0);
+        a.beq(skip_msacc);
+
+        /* The values of the X registers are in the X register array,
+         * so we can use XREG0 to save the contents of ARG3 during the
+         * call. */
+        a.mr(XREG0, ARG3);
+        a.ld(ARG1, erts_msacc_cache);
+        mov_imm(ARG2, ERTS_MSACC_STATE_NIF);
+        mov_imm(ARG3, 1);
+        runtime_call<void (*)(ErtsMsAcc *, Uint, int),
+                     erts_msacc_set_state_m__>();
+        a.mr(ARG3, XREG0);
+
+        a.bind(skip_msacc);
+    }
+#endif
+
+    /* The function pointer and the module of the NIF follow the
+     * `call_bif_nif` field of the ErtsNativeFunc that ARG3 points to. */
+    a.mr(ARG1, c_p);
+    a.mr(ARG2, ARG3);
+    load_x_reg_array(ARG3);
+    ERTS_CT_ASSERT(BEAM_ASM_NFUNC_SIZE % sizeof(UWord) == 0);
+    a.ld(ARG4, ppc::Mem(ARG2, BEAM_ASM_NFUNC_SIZE));
+    a.ld(ARG5, ppc::Mem(ARG2, BEAM_ASM_NFUNC_SIZE + sizeof(UWord)));
+    runtime_call<Eterm (*)(Process *,
+                           ErtsCodePtr,
+                           Eterm *,
+                           BeamJitNifF *,
+                           struct erl_module_nif *),
+                 beam_jit_call_nif>();
+
+    emit_bif_nif_epilogue();
+}
+
+void BeamGlobalAssembler::emit_dispatch_nif(void) {
+    /* c_p->i points into the trampoline of a ErtsNativeFunc, right after the
+     * `info` structure.
+     *
+     * ErtsNativeFunc already follows the NIF call layout, so we don't need to
+     * do anything beyond loading the address. */
+    a.ld(ARG3, ppc::Mem(c_p, offsetof(Process, i)));
+    a.b(labels[call_nif_shared]);
+}
+
+/* Distance from the start of a NIF stub to the second instruction after its
+ * `dispatch` label, which is the address that the stub passes to
+ * `call_nif_yield_helper` in SUPER_TMP. See `emit_call_nif`. */
+#define CALL_NIF_HELPER_OFFSET                                                 \
+    (BEAM_ASM_NFUNC_SIZE + sizeof(UWord[3]) + sizeof(Uint32))
+
+/* SUPER_TMP = address inside the NIF stub, see above. */
+void BeamGlobalAssembler::emit_call_nif_yield_helper() {
+    Label yield = a.new_label();
+
+    /* ARG3 = current I, just past the end of an ErtsCodeInfo. */
+    sub(ARG3, SUPER_TMP, CALL_NIF_HELPER_OFFSET);
+
+    if (erts_alcu_enable_code_atags) {
+        /* See emit_i_test_yield. */
+        a.std(ARG3, ppc::Mem(c_p, offsetof(Process, i)));
+    }
+
+    a.addic_rc(FCALLS, FCALLS, imm(-1));
+    a.ble(yield);
+    a.b(labels[call_nif_shared]);
+
+    a.bind(yield);
+    {
+        int mfa_offset = sizeof(ErtsCodeMFA);
+        int arity_offset = offsetof(ErtsCodeMFA, arity) - mfa_offset;
+
+        a.ld(TMP1, ppc::Mem(ARG3, arity_offset));
+        a.stb(TMP1, ppc::Mem(c_p, offsetof(Process, arity)));
+
+        sub(TMP1, ARG3, mfa_offset);
+        a.std(TMP1, ppc::Mem(c_p, offsetof(Process, current)));
+
+        /* Yield to `dispatch` rather than `entry` to avoid pushing too many
+         * frames to the stack. See `emit_call_nif` for details. */
+        add(ARG3, ARG3, BEAM_ASM_NFUNC_SIZE + sizeof(UWord[3]));
+        a.b(labels[context_switch_simplified]);
+    }
+}
+
+/* WARNING: This stub is memcpy'd, so all code herein must be explicitly
+ * position-independent.
+ *
+ * It must also fit in the `call_nif` field of ErtsNifBeamStub, which leaves
+ * room for no more than 24 bytes after the three words of data. */
+void BeamModuleAssembler::emit_call_nif(const ArgWord &Func,
+                                        const ArgWord &NifMod,
+                                        const ArgWord &DirtyFunc) {
+    Label entry = a.new_label(), dispatch = a.new_label(),
+          helper = a.new_label();
+
+    /* The start of this function must mimic the layout of ErtsNativeFunc.
+     *
+     * We jump here on the very first entry. */
+    a.bind(entry);
+    {
+        a.b(dispatch);
+
+        /* The data that follows must be word-aligned. */
+        a.nop();
+
+        /* Everything prior to this, including the breakpoint, is part of the
+         * `call_bif_nif` field. */
+        ASSERT(a.offset() % sizeof(UWord) == 0);
+
+        /* ErtsNativeFunc.func */
+        a.embed_uint64(Func.get());
+
+        /* ErtsNativeFunc.m */
+        a.embed_uint64(NifMod.get());
+
+        /* ErtsNativeFunc.dfunc */
+        a.embed_uint64(DirtyFunc.get());
+    }
+
+    /* `emit_call_nif_yield_helper` relies on this to compute the address of
+     * `dispatch` */
+    ASSERT((a.offset() - code.label_offset_from_base(current_label)) ==
+           BEAM_ASM_NFUNC_SIZE + sizeof(UWord[3]));
+
+    a.bind(dispatch);
+    {
+        /* The helper works out the address of this stub from SUPER_TMP,
+         * which holds the address of the second instruction below. That
+         * saves the instructions it would take to compute it here, which
+         * there is no room for. */
+        a.lnia(SUPER_TMP);
+        a.ld(TMP1, SUPER_TMP, helper);
+        a.mtctr(TMP1);
+        a.bctr();
+
+        a.bind(helper);
+        a.embed_uint64((Uint64)ga->get_call_nif_yield_helper());
+    }
+}
+
+static ErtsCodePtr get_on_load_address(Process *c_p, Eterm module) {
+    const Module *modp = erts_get_module(module, erts_active_code_ix());
+
+    if (modp && modp->on_load) {
+        const BeamCodeHeader *hdr = (modp->on_load)->code_hdr;
+
+        if (hdr) {
+            return erts_codeinfo_to_code(hdr->on_load);
+        }
+    }
+
+    c_p->freason = BADARG;
+
+    return NULL;
+}
+
+/* Implements the internal and undocumented erlang:call_on_load_function/1,
+ * which is very tricky to implement as a BIF. */
+void BeamModuleAssembler::emit_i_call_on_load_function() {
+    static ErtsCodeMFA mfa = {am_erlang, am_call_on_load_function, 1};
+    Label next = a.new_label();
+
+    a.mr(ARG2, XREG0);
+
+    /* The first X register must be preserved for the error path. */
+    emit_enter_runtime(1);
+
+    a.mr(ARG1, c_p);
+    runtime_call<ErtsCodePtr (*)(Process *, Eterm), get_on_load_address>();
+
+    emit_leave_runtime(1);
+
+    cmp(ARG1, 0);
+    a.bne(next);
+    emit_raise_exception(&mfa);
+
+    a.bind(next);
+    erlang_call(ARG1);
+}
+
+void BeamModuleAssembler::emit_i_load_nif() {
+    static ErtsCodeMFA mfa = {am_erlang, am_load_nif, 2};
+
+    Label entry = a.new_label(), next = a.new_label(), schedule = a.new_label();
+
+    a.bind(entry);
+
+    emit_enter_runtime<Update::eHeapAlloc | Update::eXRegs>(2);
+
+    a.mr(ARG1, c_p);
+    emit_adr(ARG2, current_label);
+    load_x_reg_array(ARG3);
+    runtime_call<beam_jit_nif_load_ret (*)(Process *, ErtsCodePtr, Eterm *),
+                 beam_jit_load_nif>();
+
+    emit_leave_runtime<Update::eHeapAlloc | Update::eXRegs>(2);
+
+    cmp(ARG1, RET_NIF_yield);
+    a.beq(schedule);
+
+    cmp(ARG1, RET_NIF_success);
+    a.beq(next);
+
+    emit_raise_exception(current_label, &mfa);
+
+    a.bind(schedule);
+    {
+        emit_adr(ARG3, entry);
+        a.b(resolve_fragment(ga->get_context_switch_simplified(), disp32MB));
+    }
+
+    a.bind(next);
+}

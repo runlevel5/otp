@@ -69,10 +69,6 @@ void BeamGlobalAssembler::emit_arith_compare_shared() {
     emit_nyi("arith_compare_shared");
 }
 
-void BeamGlobalAssembler::emit_bif_nif_epilogue() {
-    emit_nyi("bif_nif_epilogue");
-}
-
 void BeamGlobalAssembler::emit_bif_bit_size_body() {
     emit_nyi("bif_bit_size_body");
 }
@@ -129,24 +125,8 @@ void BeamGlobalAssembler::emit_bs_size_check_shared() {
     emit_nyi("bs_size_check_shared");
 }
 
-void BeamGlobalAssembler::emit_call_bif_shared() {
-    emit_nyi("call_bif_shared");
-}
-
-void BeamGlobalAssembler::emit_call_nif_yield_helper() {
-    emit_nyi("call_nif_yield_helper");
-}
-
 void BeamGlobalAssembler::emit_catch_end_shared() {
     emit_nyi("catch_end_shared");
-}
-
-void BeamGlobalAssembler::emit_call_nif_early() {
-    emit_nyi("call_nif_early");
-}
-
-void BeamGlobalAssembler::emit_call_nif_shared() {
-    emit_nyi("call_nif_shared");
 }
 
 void BeamGlobalAssembler::emit_check_float_error() {
@@ -163,14 +143,6 @@ void BeamGlobalAssembler::emit_create_native_record_shared() {
 
 void BeamGlobalAssembler::emit_debug_bp() {
     emit_nyi("debug_bp");
-}
-
-void BeamGlobalAssembler::emit_dispatch_bif() {
-    emit_nyi("dispatch_bif");
-}
-
-void BeamGlobalAssembler::emit_dispatch_nif() {
-    emit_nyi("dispatch_nif");
 }
 
 void BeamGlobalAssembler::emit_dispatch_save_calls_fun() {
@@ -559,22 +531,6 @@ void BeamModuleAssembler::emit_build_stacktrace() {
     emit_nyi("build_stacktrace");
 }
 
-void BeamModuleAssembler::emit_call_bif(const ArgWord &) {
-    emit_nyi("call_bif");
-}
-
-void BeamModuleAssembler::emit_call_bif_mfa(const ArgAtom &,
-                                            const ArgAtom &,
-                                            const ArgWord &) {
-    emit_nyi("call_bif_mfa");
-}
-
-void BeamModuleAssembler::emit_call_nif(const ArgWord &,
-                                        const ArgWord &,
-                                        const ArgWord &) {
-    emit_nyi("call_nif");
-}
-
 void BeamModuleAssembler::emit_case_end(const ArgSource &) {
     emit_nyi("case_end");
 }
@@ -805,10 +761,6 @@ void BeamModuleAssembler::emit_i_call_fun_last(const ArgWord &,
     emit_nyi("i_call_fun_last");
 }
 
-void BeamModuleAssembler::emit_i_call_on_load_function() {
-    emit_nyi("i_call_on_load_function");
-}
-
 void BeamModuleAssembler::emit_i_call_trace_return() {
     emit_nyi("i_call_trace_return");
 }
@@ -986,10 +938,6 @@ void BeamModuleAssembler::emit_i_lambda_trampoline(const ArgLambda &Lambda,
 
 void BeamModuleAssembler::emit_i_line_breakpoint_trampoline() {
     emit_nyi("i_line_breakpoint_trampoline");
-}
-
-void BeamModuleAssembler::emit_i_load_nif() {
-    emit_nyi("i_load_nif");
 }
 
 void BeamModuleAssembler::emit_i_loop_rec(const ArgLabel &) {
