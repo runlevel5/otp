@@ -177,14 +177,6 @@ void BeamGlobalAssembler::emit_dispatch_nif() {
     emit_nyi("dispatch_nif");
 }
 
-void BeamGlobalAssembler::emit_dispatch_return() {
-    emit_nyi("dispatch_return");
-}
-
-void BeamGlobalAssembler::emit_dispatch_save_calls_export() {
-    emit_nyi("dispatch_save_calls_export");
-}
-
 void BeamGlobalAssembler::emit_dispatch_save_calls_fun() {
     emit_nyi("dispatch_save_calls_fun");
 }
@@ -442,14 +434,6 @@ void BeamModuleAssembler::emit_allocate_heap(const ArgWord &,
     emit_nyi("allocate_heap");
 }
 
-void BeamModuleAssembler::emit_apply(const ArgWord &) {
-    emit_nyi("apply");
-}
-
-void BeamModuleAssembler::emit_apply_last(const ArgWord &, const ArgWord &) {
-    emit_nyi("apply_last");
-}
-
 void BeamModuleAssembler::emit_badmatch(const ArgSource &) {
     emit_nyi("badmatch");
 }
@@ -646,10 +630,6 @@ void BeamModuleAssembler::emit_continue_exit() {
     emit_nyi("continue_exit");
 }
 
-void BeamModuleAssembler::emit_deallocate(const ArgWord &) {
-    emit_nyi("deallocate");
-}
-
 void BeamModuleAssembler::emit_fconv(const ArgSource &, const ArgFRegister &) {
     emit_nyi("fconv");
 }
@@ -701,10 +681,6 @@ void BeamModuleAssembler::emit_get_two_tuple_elements(const ArgSource &,
     emit_nyi("get_two_tuple_elements");
 }
 
-void BeamModuleAssembler::emit_i_apply() {
-    emit_nyi("i_apply");
-}
-
 void BeamModuleAssembler::emit_i_apply_fun() {
     emit_nyi("i_apply_fun");
 }
@@ -715,14 +691,6 @@ void BeamModuleAssembler::emit_i_apply_fun_last(const ArgWord &) {
 
 void BeamModuleAssembler::emit_i_apply_fun_only() {
     emit_nyi("i_apply_fun_only");
-}
-
-void BeamModuleAssembler::emit_i_apply_last(const ArgWord &) {
-    emit_nyi("i_apply_last");
-}
-
-void BeamModuleAssembler::emit_i_apply_only() {
-    emit_nyi("i_apply_only");
 }
 
 void BeamModuleAssembler::emit_i_band(const ArgLabel &,
@@ -912,23 +880,6 @@ void BeamModuleAssembler::emit_i_bxor(const ArgLabel &,
     emit_nyi("i_bxor");
 }
 
-void BeamModuleAssembler::emit_i_call(const ArgLabel &) {
-    emit_nyi("i_call");
-}
-
-void BeamModuleAssembler::emit_i_call_ext(const ArgExport &) {
-    emit_nyi("i_call_ext");
-}
-
-void BeamModuleAssembler::emit_i_call_ext_last(const ArgExport &,
-                                               const ArgWord &) {
-    emit_nyi("i_call_ext_last");
-}
-
-void BeamModuleAssembler::emit_i_call_ext_only(const ArgExport &) {
-    emit_nyi("i_call_ext_only");
-}
-
 void BeamModuleAssembler::emit_i_call_fun(const ArgWord &) {
     emit_nyi("i_call_fun");
 }
@@ -951,16 +902,8 @@ void BeamModuleAssembler::emit_i_call_fun_last(const ArgWord &,
     emit_nyi("i_call_fun_last");
 }
 
-void BeamModuleAssembler::emit_i_call_last(const ArgLabel &, const ArgWord &) {
-    emit_nyi("i_call_last");
-}
-
 void BeamModuleAssembler::emit_i_call_on_load_function() {
     emit_nyi("i_call_on_load_function");
-}
-
-void BeamModuleAssembler::emit_i_call_only(const ArgLabel &) {
-    emit_nyi("i_call_only");
 }
 
 void BeamModuleAssembler::emit_i_call_trace_return() {
@@ -1535,24 +1478,6 @@ void BeamModuleAssembler::emit_mark_unreachable() {
     emit_nyi("mark_unreachable");
 }
 
-void BeamModuleAssembler::emit_move_call_ext_last(const ArgYRegister &,
-                                                  const ArgRegister &,
-                                                  const ArgExport &,
-                                                  const ArgWord &) {
-    emit_nyi("move_call_ext_last");
-}
-
-void BeamModuleAssembler::emit_move_call_last(const ArgYRegister &,
-                                              const ArgRegister &,
-                                              const ArgLabel &,
-                                              const ArgWord &) {
-    emit_nyi("move_call_last");
-}
-
-void BeamModuleAssembler::emit_move_deallocate_return() {
-    emit_nyi("move_deallocate_return");
-}
-
 void BeamModuleAssembler::emit_move_trim(const ArgSource &,
                                          const ArgRegister &,
                                          const ArgWord &) {
@@ -1652,10 +1577,6 @@ void BeamModuleAssembler::emit_recv_marker_use(const ArgRegister &) {
 
 void BeamModuleAssembler::emit_remove_message() {
     emit_nyi("remove_message");
-}
-
-void BeamModuleAssembler::emit_return() {
-    emit_nyi("return");
 }
 
 void BeamModuleAssembler::emit_return_trace() {

@@ -1141,6 +1141,12 @@ public:
     void patchStrings(char *rw_base, const byte *string);
 
 protected:
+    ppc::Mem emit_variable_apply(bool includeI);
+    ppc::Mem emit_fixed_apply(const ArgWord &arity, bool includeI);
+
+    void emit_return_do(bool set_I);
+    void emit_dispatch_return(bool set_I);
+
     void emit_raise_exception();
     void emit_raise_exception(const ErtsCodeMFA *exp);
     void emit_raise_exception(Label I, const ErtsCodeMFA *exp);
@@ -1244,6 +1250,233 @@ protected:
     template<typename T, T Func>
     void runtime_call() {
         a.bl(resolve_fragment(reinterpret_cast<void (*)()>(Func), disp32MB));
+    }
+
+    bool isRegisterBacked(const ArgVal &arg) {
+        if (arg.isXRegister()) {
+            return arg.as<ArgXRegister>().get() < num_register_backed_xregs;
+        } else if (arg.isFRegister()) {
+            return arg.as<ArgFRegister>().get() < num_register_backed_fregs;
+        }
+
+        return false;
+    }
+
+    template<typename RegType = ppc::Gp>
+    struct Variable {
+        RegType reg;
+        ppc::Mem mem;
+
+        Variable(RegType _r) : Variable(_r, ppc::Mem()) {
+        }
+        Variable(RegType _r, ppc::Mem _mem) : reg(_r), mem(_mem) {
+        }
+    };
+
+    Variable<ppc::Gp> init_destination(const ArgVal &arg, ppc::Gp tmp) {
+        if (isRegisterBacked(arg)) {
+            auto index = arg.as<ArgXRegister>().get();
+            return Variable(register_backed_xregs[index]);
+        } else {
+            return Variable(tmp, getArgRef(arg));
+        }
+    }
+
+    Variable<ppc::Vec> init_destination(const ArgVal &arg, ppc::Vec tmp) {
+        if (isRegisterBacked(arg)) {
+            auto index = arg.as<ArgFRegister>().get();
+            return Variable(register_backed_fregs[index]);
+        } else {
+            return Variable(tmp, getArgRef(arg));
+        }
+    }
+
+    Variable<ppc::Gp> load_source(const ArgVal &arg, ppc::Gp tmp) {
+        /* `tmp` is used as a base register when loading constants. */
+        ASSERT(tmp != LR_TMP);
+
+        if (arg.isLiteral()) {
+            preserve_cache(
+                    [&]() {
+                        load_constant(tmp, arg);
+                    },
+                    tmp);
+            return Variable(tmp);
+        } else if (arg.isRegister()) {
+            if (isRegisterBacked(arg)) {
+                auto index = arg.as<ArgXRegister>().get();
+                ppc::Gp reg = register_backed_xregs[index];
+                reg_cache.invalidate(reg);
+                return Variable(reg);
+            }
+
+            auto ref = getArgRef(arg);
+            ld_cached(tmp, ref);
+            return Variable(tmp, ref);
+        } else {
+            if (arg.isImmed() || arg.isWord()) {
+                auto val = arg.isImmed() ? arg.as<ArgImmed>().get()
+                                         : arg.as<ArgWord>().get();
+
+                /* Values that fit in 32 bits take at most two instructions,
+                 * which is no more than loading them from memory takes. */
+                if (Support::is_int_n<32>((Sint64)val)) {
+                    preserve_cache(
+                            [&]() {
+                                mov_imm(tmp, val);
+                            },
+                            tmp);
+                    return Variable(tmp);
+                }
+            }
+
+            preserve_cache(
+                    [&]() {
+                        load_constant(tmp, arg);
+                    },
+                    tmp);
+            return Variable(tmp);
+        }
+    }
+
+    /*
+     * Load the argument into ANY register, using the
+     * cache to avoid reloading the value.
+     *
+     * Because it is not possible to predict into which register
+     * the value will end up, the only safe way to use this function
+     * is when the register is used immediately and only once.
+     */
+    Variable<ppc::Gp> load_source(const ArgVal &arg) {
+        if (!arg.isRegister()) {
+            return load_source(arg, TMP1);
+        } else {
+            ppc::Gp cached_reg = find_cache(getArgRef(arg));
+
+            if (cached_reg.is_valid()) {
+                return load_source(arg, cached_reg);
+            } else {
+                return load_source(arg, TMP1);
+            }
+        }
+    }
+
+    auto load_sources(const ArgVal &Src1,
+                      ppc::Gp tmp1,
+                      const ArgVal &Src2,
+                      ppc::Gp tmp2) {
+        return std::make_pair(load_source(Src1, tmp1), load_source(Src2, tmp2));
+    }
+
+    Variable<ppc::Vec> load_source(const ArgVal &arg, ppc::Vec tmp) {
+        if (isRegisterBacked(arg)) {
+            auto index = arg.as<ArgFRegister>().get();
+            return Variable<ppc::Vec>(register_backed_fregs[index]);
+        }
+
+        a.lfd(tmp, getArgRef(arg));
+        return Variable<ppc::Vec>(tmp);
+    }
+
+    template<typename Reg>
+    void mov_var(const Variable<Reg> &to, const Variable<Reg> &from) {
+        mov_var(to.reg, from);
+    }
+
+    template<typename Reg>
+    void mov_var(const Variable<Reg> &to, Reg from) {
+        if (to.reg != from) {
+            mov_preserve_cache(to.reg, from);
+        }
+    }
+
+    template<typename Reg>
+    void mov_var(Reg to, const Variable<Reg> &from) {
+        if (to != from.reg) {
+            mov_preserve_cache(to, from.reg);
+        }
+    }
+
+    void flush_var(const Variable<ppc::Gp> &to) {
+        if (to.mem.has_base()) {
+            std_cache(to.reg, to.mem);
+        } else {
+            reg_cache.invalidate(to.reg);
+        }
+    }
+
+    void flush_var(const Variable<ppc::Vec> &to) {
+        if (to.mem.has_base()) {
+            a.stfd(to.reg, to.mem);
+        }
+    }
+
+    void flush_vars(const Variable<ppc::Gp> &to1,
+                    const Variable<ppc::Gp> &to2) {
+        flush_var(to1);
+        flush_var(to2);
+    }
+
+    void flush_vars(const Variable<ppc::Gp> &to1,
+                    const Variable<ppc::Gp> &to2,
+                    const Variable<ppc::Gp> &to3) {
+        flush_var(to1);
+        flush_var(to2);
+        flush_var(to3);
+    }
+
+    void mov_arg(const ArgRegister &To, const ArgVal &From) {
+        if (isRegisterBacked(To)) {
+            auto to = init_destination(To, SUPER_TMP);
+            auto from = load_source(From, to.reg);
+            mov_var(to, from);
+            flush_var(to);
+        } else {
+            auto from = load_source(From, SUPER_TMP);
+            auto to = init_destination(To, from.reg);
+            mov_var(to, from);
+            flush_var(to);
+        }
+    }
+
+    void mov_arg(const ArgRegister &To, ppc::Mem From) {
+        auto to = init_destination(To, SUPER_TMP);
+        a.ld(to.reg, From);
+        flush_var(to);
+    }
+
+    void mov_arg(ppc::Mem To, const ArgVal &From) {
+        auto from = load_source(From, SUPER_TMP);
+        auto to = Variable(from.reg, To);
+        flush_var(to);
+    }
+
+    void mov_arg(ppc::Gp to, const ArgVal &from) {
+        auto r = load_source(from, to);
+        if (r.reg != to) {
+            mov_preserve_cache(to, r.reg);
+        }
+    }
+
+    void mov_arg(const ArgVal &to, ppc::Gp from) {
+        auto r = init_destination(to, from);
+        if (r.reg != from) {
+            mov_preserve_cache(r.reg, from);
+        }
+        flush_var(r);
+    }
+
+    /* Signed compare of `gp` and `arg`, with the result in `cr`. */
+    void cmp_arg(ppc::Gp gp, const ArgVal &arg, ppc::Cr cr = ppc::cr0) {
+        if (arg.isImmed() || arg.isWord()) {
+            Sint val = arg.isImmed() ? arg.as<ArgImmed>().get()
+                                     : arg.as<ArgWord>().get();
+            cmp(gp, val, cr);
+            return;
+        }
+
+        auto tmp = load_source(arg, SUPER_TMP);
+        a.cmpd(cr, gp, tmp.reg);
     }
 };
 
