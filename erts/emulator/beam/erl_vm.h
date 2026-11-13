@@ -99,7 +99,7 @@ extern ErtsFrameLayout ERTS_WRITE_UNLIKELY(erts_frame_layout);
 
 #if defined(BEAMASM) && defined(NATIVE_ERLANG_STACK)
 #define S_REDZONE (CP_SIZE * 3)
-#elif defined(BEAMASM) && defined(__aarch64__)
+#elif defined(BEAMASM) && (defined(__aarch64__) || defined(__powerpc64__))
 #define S_REDZONE (CP_SIZE * 3)
 #elif defined(DEBUG)
 /* Ensure that a redzone won't cause problems in the interpreter. */

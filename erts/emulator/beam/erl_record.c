@@ -281,7 +281,8 @@ Eterm erl_create_local_native_record(Process* p, Eterm* reg,
     E = p->stop;
 
 #if defined(BEAMASM)
-#  if defined(NATIVE_ERLANG_STACK) || defined(__aarch64__)
+#  if defined(NATIVE_ERLANG_STACK) || defined(__aarch64__) ||                   \
+          defined(__powerpc64__)
     E++;
 #  endif
 

@@ -54,6 +54,14 @@ ethr_sync__(void)
     __asm__ __volatile__ ("sync\n\t" : : : "memory");
 }
 
+#define ETHR_INSTRUCTION_BARRIER ethr_instruction_fence__()
+
+static __inline__ void
+ethr_instruction_fence__(void)
+{
+    __asm__ __volatile__ ("isync\n\t" : : : "memory");
+}
+
 /*
  * According to the "memory barrier intstructions" section of
  * http://www.ibm.com/developerworks/systems/articles/powerpc.html
