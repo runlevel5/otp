@@ -1141,6 +1141,19 @@ public:
     void patchStrings(char *rw_base, const byte *string);
 
 protected:
+    void emit_gc_test(const ArgWord &Stack,
+                      const ArgWord &Heap,
+                      const ArgWord &Live);
+    void emit_gc_test_preserve(const ArgWord &Need,
+                               const ArgWord &Live,
+                               const ArgSource &Preserve,
+                               ppc::Gp preserve_reg);
+
+    void emit_error(int code);
+    void emit_error(int reason, const ArgSource &Src);
+
+    void emit_validate(const ArgWord &Arity);
+
     ppc::Mem emit_variable_apply(bool includeI);
     ppc::Mem emit_fixed_apply(const ArgWord &arity, bool includeI);
 

@@ -320,10 +320,6 @@ void BeamGlobalAssembler::emit_i_signed_width_body_shared() {
     emit_nyi("i_signed_width_body_shared");
 }
 
-void BeamGlobalAssembler::emit_i_test_yield_shared() {
-    emit_nyi("i_test_yield_shared");
-}
-
 void BeamGlobalAssembler::emit_i_bxor_body_shared() {
     emit_nyi("i_bxor_body_shared");
 }
@@ -423,16 +419,6 @@ void BeamGlobalAssembler::emit_update_map_single_exact_body_shared() {
 /*
  * Instructions.
  */
-
-void BeamModuleAssembler::emit_allocate(const ArgWord &, const ArgWord &) {
-    emit_nyi("allocate");
-}
-
-void BeamModuleAssembler::emit_allocate_heap(const ArgWord &,
-                                             const ArgWord &,
-                                             const ArgWord &) {
-    emit_nyi("allocate_heap");
-}
 
 void BeamModuleAssembler::emit_badmatch(const ArgSource &) {
     emit_nyi("badmatch");
@@ -624,10 +610,6 @@ void BeamModuleAssembler::emit_catch(const ArgYRegister &, const ArgCatch &) {
 
 void BeamModuleAssembler::emit_catch_end(const ArgYRegister &) {
     emit_nyi("catch_end");
-}
-
-void BeamModuleAssembler::emit_continue_exit() {
-    emit_nyi("continue_exit");
 }
 
 void BeamModuleAssembler::emit_fconv(const ArgSource &, const ArgFRegister &) {
@@ -1239,10 +1221,6 @@ void BeamModuleAssembler::emit_i_test_arity(const ArgLabel &,
     emit_nyi("i_test_arity");
 }
 
-void BeamModuleAssembler::emit_i_test_yield() {
-    emit_nyi("i_test_yield");
-}
-
 void BeamModuleAssembler::emit_i_unary_minus(const ArgLabel &,
                                              const ArgWord &,
                                              const ArgSource &,
@@ -1275,14 +1253,6 @@ void BeamModuleAssembler::emit_i_update_native_record(
         const ArgWord &,
         const Span<const ArgVal> &) {
     emit_nyi("i_update_native_record");
-}
-
-void BeamModuleAssembler::emit_i_validate(const ArgWord &) {
-    emit_nyi("i_validate");
-}
-
-void BeamModuleAssembler::emit_i_yield() {
-    emit_nyi("i_yield");
 }
 
 void BeamModuleAssembler::emit_if_end() {
@@ -1520,10 +1490,6 @@ void BeamModuleAssembler::emit_nofail_bif2(const ArgSource &,
     emit_nyi("nofail_bif2");
 }
 
-void BeamModuleAssembler::emit_normal_exit() {
-    emit_nyi("normal_exit");
-}
-
 void BeamModuleAssembler::emit_put_list(const ArgSource &,
                                         const ArgSource &,
                                         const ArgRegister &) {
@@ -1631,10 +1597,6 @@ void BeamModuleAssembler::emit_swap4(const ArgRegister &,
 
 void BeamModuleAssembler::emit_system_limit_body() {
     emit_nyi("system_limit_body");
-}
-
-void BeamModuleAssembler::emit_test_heap(const ArgWord &, const ArgWord &) {
-    emit_nyi("test_heap");
 }
 
 void BeamModuleAssembler::emit_timeout() {
