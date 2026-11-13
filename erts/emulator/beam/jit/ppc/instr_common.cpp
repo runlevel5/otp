@@ -668,6 +668,547 @@ void BeamModuleAssembler::emit_self(const ArgRegister &Dst) {
     mov_arg(Dst, ppc::Mem(c_p, offsetof(Process, common.id)));
 }
 
+void BeamModuleAssembler::emit_is_nonempty_list(const ArgLabel &Fail,
+                                                const ArgRegister &Src) {
+    auto list_ptr = load_source(Src);
+    emit_is_cons(resolve_beam_label(Fail, dispUnknown), list_ptr.reg);
+}
+
+void BeamModuleAssembler::emit_jump(const ArgLabel &Fail) {
+    a.b(resolve_beam_label(Fail, disp32MB));
+    mark_unreachable();
+}
+
+void BeamModuleAssembler::emit_is_atom(const ArgLabel &Fail,
+                                       const ArgSource &Src) {
+    auto src = load_source(Src);
+
+    preserve_cache(
+            [&]() {
+                a.andi_rc(TMP1, src.reg, imm(_TAG_IMMED2_MASK));
+                cmp(TMP1, _TAG_IMMED2_ATOM);
+                a.bne(resolve_beam_label(Fail, disp32K));
+            },
+            TMP1);
+}
+
+void BeamModuleAssembler::emit_is_boolean(const ArgLabel &Fail,
+                                          const ArgSource &Src) {
+    /* Since am_true and am_false differ by a single bit, we can simplify the
+     * check by setting said bit and comparing against the greater one. */
+    ERTS_CT_ASSERT(am_false == make_atom(0));
+    ERTS_CT_ASSERT(am_true == make_atom(1));
+
+    auto src = load_source(Src, TMP1);
+    a.ori(TMP1, src.reg, imm(am_true & ~_TAG_IMMED2_MASK));
+    cmp(TMP1, am_true);
+    a.bne(resolve_beam_label(Fail, disp32K));
+}
+
+void BeamModuleAssembler::emit_is_bitstring(const ArgLabel &Fail,
+                                            const ArgSource &Src) {
+    auto src = load_source(Src, ARG1);
+
+    emit_is_boxed(resolve_beam_label(Fail, dispUnknown), Src, src.reg);
+
+    if (masked_types<BeamTypeId::MaybeBoxed>(Src) == BeamTypeId::Bitstring) {
+        comment("skipped header test since we know it's a bitstring when "
+                "boxed");
+    } else {
+        ppc::Gp boxed_ptr = emit_ptr_val(ARG1, src.reg);
+        load_mem(TMP1, emit_boxed_val(boxed_ptr));
+
+        /* Use a mask that also clears the primary tag bits. That works
+         * because we KNOW that a boxed pointer always points to a header
+         * word and that the primary tag for a header is 0. */
+        const auto mask = _BITSTRING_TAG_MASK & ~_TAG_PRIMARY_MASK;
+        ERTS_CT_ASSERT(TAG_PRIMARY_HEADER == 0);
+        ERTS_CT_ASSERT(_TAG_HEADER_HEAP_BITS == (_TAG_HEADER_HEAP_BITS & mask));
+        a.andi_rc(TMP1, TMP1, imm(mask));
+        cmp(TMP1, _TAG_HEADER_HEAP_BITS);
+        a.bne(resolve_beam_label(Fail, disp32K));
+    }
+}
+
+void BeamModuleAssembler::emit_is_binary(const ArgLabel &Fail,
+                                         const ArgSource &Src) {
+    auto src = load_source(Src, ARG1);
+
+    emit_is_boxed(resolve_beam_label(Fail, dispUnknown), Src, src.reg);
+    emit_untag_ptr(ARG1, src.reg);
+
+    a.ld(TMP1, ppc::Mem(ARG1, offsetof(ErlHeapBits, thing_word)));
+    a.ld(TMP2, ppc::Mem(ARG1, offsetof(ErlHeapBits, size)));
+
+    Label not_sub_bits = a.new_label();
+    cmp(TMP1, HEADER_SUB_BITS);
+    a.bne(not_sub_bits);
+    {
+        a.ld(TMP2, ppc::Mem(ARG1, offsetof(ErlSubBits, start)));
+        a.ld(TMP3, ppc::Mem(ARG1, offsetof(ErlSubBits, end)));
+        a.sub(TMP2, TMP3, TMP2);
+    }
+    a.bind(not_sub_bits);
+
+    if (masked_types<BeamTypeId::MaybeBoxed>(Src) == BeamTypeId::Bitstring) {
+        comment("skipped header test since we know it's a bitstring when "
+                "boxed");
+        a.andi_rc(LR_TMP, TMP2, imm(7));
+    } else {
+        const auto mask = _BITSTRING_TAG_MASK & ~_TAG_PRIMARY_MASK;
+        ERTS_CT_ASSERT(TAG_PRIMARY_HEADER == 0);
+        ERTS_CT_ASSERT(_TAG_HEADER_HEAP_BITS == (_TAG_HEADER_HEAP_BITS & mask));
+        a.andi_rc(TMP1, TMP1, imm(mask));
+
+        /* Shift out all but the lowest three bits in the size, leaving a
+         * non-zero value if the size is not evenly divisible by 8.
+         *
+         * Thus, OR-ing this value into the header word forces the check to
+         * fail when we have a non-binary bitstring. */
+        ERTS_CT_ASSERT((UWORD_CONSTANT(7) << (64 - 3)) > _BITSTRING_TAG_MASK);
+        a.sldi(TMP2, TMP2, 64 - 3);
+        a.or_(TMP1, TMP1, TMP2);
+        cmp(TMP1, _TAG_HEADER_HEAP_BITS);
+    }
+
+    a.bne(resolve_beam_label(Fail, disp32K));
+}
+
+void BeamModuleAssembler::emit_is_float(const ArgLabel &Fail,
+                                        const ArgSource &Src) {
+    auto src = load_source(Src, TMP1);
+
+    emit_is_boxed(resolve_beam_label(Fail, dispUnknown), Src, src.reg);
+
+    if (masked_types<BeamTypeId::MaybeBoxed>(Src) == BeamTypeId::Float) {
+        comment("skipped header test since we know it's a float when boxed");
+    } else {
+        ppc::Gp boxed_ptr = emit_ptr_val(TMP1, src.reg);
+        load_mem(TMP1, emit_boxed_val(boxed_ptr));
+
+        cmp(TMP1, HEADER_FLONUM);
+        a.bne(resolve_beam_label(Fail, disp32K));
+    }
+}
+
+void BeamModuleAssembler::emit_is_function(const ArgLabel &Fail,
+                                           const ArgRegister &Src) {
+    auto src = load_source(Src, TMP1);
+
+    emit_is_boxed(resolve_beam_label(Fail, dispUnknown), Src, src.reg);
+
+    if (masked_types<BeamTypeId::MaybeBoxed>(Src) == BeamTypeId::Fun) {
+        comment("skipped header test since we know it's a fun when boxed");
+    } else {
+        ppc::Gp boxed_ptr = emit_ptr_val(TMP1, src.reg);
+
+        /* The sub tag is in the lowest byte of the header word. */
+        ERTS_CT_ASSERT(FUN_HEADER_ARITY_OFFS == 8);
+        load_mem(TMP1, emit_boxed_val(boxed_ptr));
+        a.andi_rc(TMP1, TMP1, imm(0xFF));
+        cmp(TMP1, FUN_SUBTAG);
+        a.bne(resolve_beam_label(Fail, disp32K));
+    }
+}
+
+void BeamModuleAssembler::emit_is_function2(const ArgLabel &Fail,
+                                            const ArgSource &Src,
+                                            const ArgSource &Arity) {
+    if (!Arity.isSmall()) {
+        /*
+         * Non-literal arity - extremely uncommon. Generate simple code.
+         */
+        mov_arg(ARG2, Src);
+        mov_arg(ARG3, Arity);
+
+        emit_enter_runtime();
+
+        a.mr(ARG1, c_p);
+        runtime_call<Eterm (*)(Process *, Eterm, Eterm), erl_is_function>();
+
+        emit_leave_runtime();
+
+        cmp(ARG1, am_true);
+        a.bne(resolve_beam_label(Fail, disp32K));
+
+        return;
+    }
+
+    unsigned arity = Arity.as<ArgSmall>().getUnsigned();
+    if (arity > MAX_ARG) {
+        /* Arity is negative or too large. */
+        a.b(resolve_beam_label(Fail, disp32MB));
+        mark_unreachable();
+
+        return;
+    }
+
+    auto src = load_source(Src, TMP1);
+
+    emit_is_boxed(resolve_beam_label(Fail, dispUnknown), Src, src.reg);
+
+    ppc::Gp boxed_ptr = emit_ptr_val(TMP1, src.reg);
+
+    /* The sub tag and the arity are in the lowest two bytes of the header
+     * word. */
+    ERTS_CT_ASSERT(FUN_HEADER_ARITY_OFFS == 8);
+    ERTS_CT_ASSERT(FUN_HEADER_ENV_SIZE_OFFS == 16);
+    load_mem(TMP2, emit_boxed_val(boxed_ptr));
+    a.andi_rc(TMP2, TMP2, imm(0xFFFF));
+    cmpl(TMP2, MAKE_FUN_HEADER(arity, 0, 0) & 0xFFFF);
+    a.bne(resolve_beam_label(Fail, disp32K));
+}
+
+void BeamModuleAssembler::emit_is_integer(const ArgLabel &Fail,
+                                          const ArgSource &Src) {
+    auto src = load_source(Src, TMP1);
+
+    if (always_immediate(Src)) {
+        comment("skipped test for boxed since the value is always immediate");
+        a.andi_rc(TMP2, src.reg, imm(_TAG_IMMED1_MASK));
+        cmp(TMP2, _TAG_IMMED1_SMALL);
+        a.bne(resolve_beam_label(Fail, disp32K));
+
+        return;
+    }
+
+    Label next = a.new_label();
+
+    if (always_one_of<BeamTypeId::Integer, BeamTypeId::AlwaysBoxed>(Src)) {
+        comment("simplified small test since all other types are boxed");
+        emit_is_boxed(next, Src, src.reg);
+    } else {
+        a.andi_rc(TMP2, src.reg, imm(_TAG_IMMED1_MASK));
+        cmp(TMP2, _TAG_IMMED1_SMALL);
+        a.beq(next);
+
+        emit_is_boxed(resolve_beam_label(Fail, dispUnknown), Src, TMP2);
+    }
+
+    if (masked_types<BeamTypeId::MaybeBoxed>(Src) == BeamTypeId::Integer) {
+        comment("skipped header test since we know it's a bignum when "
+                "boxed");
+    } else {
+        ppc::Gp boxed_ptr = emit_ptr_val(TMP1, src.reg);
+        load_mem(TMP1, emit_boxed_val(boxed_ptr));
+
+        /* The sign bit is left out of the mask, so that both kinds of
+         * bignums compare equal to a positive one. */
+        auto mask = _HEADER_SUBTAG_MASK - _BIG_SIGN_BIT;
+        ERTS_CT_ASSERT(TAG_PRIMARY_HEADER == 0);
+        a.andi_rc(TMP1, TMP1, imm(mask));
+        cmp(TMP1, _TAG_HEADER_POS_BIG);
+        a.bne(resolve_beam_label(Fail, disp32K));
+    }
+
+    a.bind(next);
+}
+
+void BeamModuleAssembler::emit_is_list(const ArgLabel &Fail,
+                                       const ArgSource &Src) {
+    auto src = load_source(Src);
+
+    emit_is_list(resolve_beam_label(Fail, dispUnknown), src.reg);
+}
+
+void BeamModuleAssembler::emit_is_map(const ArgLabel &Fail,
+                                      const ArgSource &Src) {
+    auto src = load_source(Src);
+
+    emit_is_boxed(resolve_beam_label(Fail, dispUnknown), Src, src.reg);
+
+    /* As an optimization for the `error | #{}` case, skip checking the header
+     * word when we know that the only possible boxed type is a map. */
+    if (masked_types<BeamTypeId::MaybeBoxed>(Src) == BeamTypeId::Map) {
+        comment("skipped header test since we know it's a map when boxed");
+    } else {
+        preserve_cache(
+                [&]() {
+                    ppc::Gp boxed_ptr = emit_ptr_val(TMP3, src.reg);
+                    load_mem(TMP3, emit_boxed_val(boxed_ptr));
+                    a.andi_rc(TMP3, TMP3, imm(_TAG_HEADER_MASK));
+                    cmp(TMP3, _TAG_HEADER_MAP);
+                    a.bne(resolve_beam_label(Fail, disp32K));
+                },
+                TMP3);
+    }
+}
+
+void BeamModuleAssembler::emit_is_nil(const ArgLabel &Fail,
+                                      const ArgRegister &Src) {
+    auto src = load_source(Src);
+
+    if (always_one_of<BeamTypeId::List>(Src)) {
+        emit_is_not_cons(resolve_beam_label(Fail, dispUnknown), src.reg);
+    } else {
+        preserve_cache([&]() {
+            cmp(src.reg, NIL);
+            a.bne(resolve_beam_label(Fail, disp32K));
+        });
+    }
+}
+
+void BeamModuleAssembler::emit_is_number(const ArgLabel &Fail,
+                                         const ArgSource &Src) {
+    auto src = load_source(Src, TMP1);
+    Label next = a.new_label();
+
+    if (always_one_of<BeamTypeId::Integer, BeamTypeId::AlwaysBoxed>(Src)) {
+        comment("simplified small test since all other types are boxed");
+        emit_is_boxed(next, Src, src.reg);
+    } else {
+        a.andi_rc(TMP2, src.reg, imm(_TAG_IMMED1_MASK));
+        cmp(TMP2, _TAG_IMMED1_SMALL);
+        a.beq(next);
+
+        emit_is_boxed(resolve_beam_label(Fail, dispUnknown), Src, src.reg);
+    }
+
+    if (masked_types<BeamTypeId::MaybeBoxed>(Src) == BeamTypeId::Number) {
+        comment("skipped header test since we know it's a number when boxed");
+    } else {
+        ppc::Gp boxed_ptr = emit_ptr_val(TMP1, src.reg);
+        load_mem(TMP1, emit_boxed_val(boxed_ptr));
+
+        /* The value is a number if the header is that of a bignum of either
+         * sign, or that of a float. Both tests are done before branching on
+         * their combined result. */
+        auto mask = _HEADER_SUBTAG_MASK - _BIG_SIGN_BIT;
+        ERTS_CT_ASSERT(TAG_PRIMARY_HEADER == 0);
+        a.andi_rc(TMP2, TMP1, imm(mask));
+        cmp(TMP2, _TAG_HEADER_POS_BIG);
+        cmp(TMP1, HEADER_FLONUM, ppc::cr1);
+        a.cror(ppc::cr0.eq(), ppc::cr0.eq(), ppc::cr1.eq());
+        a.bne(resolve_beam_label(Fail, disp32K));
+    }
+
+    a.bind(next);
+}
+
+void BeamModuleAssembler::emit_is_pid(const ArgLabel &Fail,
+                                      const ArgSource &Src) {
+    auto src = load_source(Src, TMP1);
+    Label next = a.new_label();
+
+    if (always_one_of<BeamTypeId::Pid, BeamTypeId::AlwaysBoxed>(Src)) {
+        comment("simplified local pid test since all other types are boxed");
+        emit_is_boxed(next, Src, src.reg);
+    } else {
+        a.andi_rc(TMP2, src.reg, imm(_TAG_IMMED1_MASK));
+        cmp(TMP2, _TAG_IMMED1_PID);
+        a.beq(next);
+
+        /* Reuse TMP2 as the important bits are still available. */
+        emit_is_boxed(resolve_beam_label(Fail, dispUnknown), Src, TMP2);
+    }
+
+    if (masked_types<BeamTypeId::MaybeBoxed>(Src) == BeamTypeId::Pid) {
+        comment("skipped header test since we know it's a pid when boxed");
+    } else {
+        ppc::Gp boxed_ptr = emit_ptr_val(TMP1, src.reg);
+        load_mem(TMP2, emit_boxed_val(boxed_ptr));
+        a.andi_rc(TMP2, TMP2, imm(_TAG_HEADER_MASK));
+        cmp(TMP2, _TAG_HEADER_EXTERNAL_PID);
+        a.bne(resolve_beam_label(Fail, disp32K));
+    }
+
+    a.bind(next);
+}
+
+void BeamModuleAssembler::emit_is_port(const ArgLabel &Fail,
+                                       const ArgSource &Src) {
+    auto src = load_source(Src, TMP1);
+    Label next = a.new_label();
+
+    if (always_one_of<BeamTypeId::Port, BeamTypeId::AlwaysBoxed>(Src)) {
+        comment("simplified local port test since all other types are boxed");
+        emit_is_boxed(next, Src, src.reg);
+    } else {
+        a.andi_rc(TMP2, src.reg, imm(_TAG_IMMED1_MASK));
+        cmp(TMP2, _TAG_IMMED1_PORT);
+        a.beq(next);
+
+        /* Reuse TMP2 as the important bits are still available. */
+        emit_is_boxed(resolve_beam_label(Fail, dispUnknown), Src, TMP2);
+    }
+
+    if (masked_types<BeamTypeId::MaybeBoxed>(Src) == BeamTypeId::Port) {
+        comment("skipped header test since we know it's a port when boxed");
+    } else {
+        ppc::Gp boxed_ptr = emit_ptr_val(TMP1, src.reg);
+        load_mem(TMP2, emit_boxed_val(boxed_ptr));
+        a.andi_rc(TMP2, TMP2, imm(_TAG_HEADER_MASK));
+        cmp(TMP2, _TAG_HEADER_EXTERNAL_PORT);
+        a.bne(resolve_beam_label(Fail, disp32K));
+    }
+
+    a.bind(next);
+}
+
+void BeamModuleAssembler::emit_is_reference(const ArgLabel &Fail,
+                                            const ArgSource &Src) {
+    auto src = load_source(Src, TMP1);
+
+    emit_is_boxed(resolve_beam_label(Fail, dispUnknown), Src, src.reg);
+
+    if (masked_types<BeamTypeId::MaybeBoxed>(Src) == BeamTypeId::Reference) {
+        comment("skipped header test since we know it's a ref when boxed");
+    } else {
+        ppc::Gp boxed_ptr = emit_ptr_val(TMP1, src.reg);
+        load_mem(TMP1, emit_boxed_val(boxed_ptr));
+
+        /* The value is a reference if the header is that of a local or an
+         * external one. */
+        a.andi_rc(TMP1, TMP1, imm(_TAG_HEADER_MASK));
+        cmp(TMP1, _TAG_HEADER_EXTERNAL_REF);
+        cmp(TMP1, _TAG_HEADER_REF, ppc::cr1);
+        a.cror(ppc::cr0.eq(), ppc::cr0.eq(), ppc::cr1.eq());
+        a.bne(resolve_beam_label(Fail, disp32K));
+    }
+}
+
+/* Note: This instruction leaves the untagged pointer to the tuple in
+ * ARG1. */
+void BeamModuleAssembler::emit_i_is_tagged_tuple(const ArgLabel &Fail,
+                                                 const ArgSource &Src,
+                                                 const ArgWord &Arity,
+                                                 const ArgAtom &Tag) {
+    auto src = load_source(Src, ARG1);
+
+    emit_is_boxed(resolve_beam_label(Fail, dispUnknown), Src, src.reg);
+
+    emit_untag_ptr(ARG1, src.reg);
+
+    /* It is safe to fetch the both the header word and the first
+     * element of the tuple because the empty tuple is always
+     * a literal that is padded so that the word after arity is
+     * allocated. */
+    a.ld(TMP1, ppc::Mem(ARG1));
+    a.ld(TMP2, ppc::Mem(ARG1, sizeof(Eterm)));
+
+    /* Both the tag and the arity must match. */
+    cmp_arg(TMP2, Tag);
+    cmp_arg(TMP1, Arity, ppc::cr1);
+    a.crand(ppc::cr0.eq(), ppc::cr0.eq(), ppc::cr1.eq());
+
+    a.bne(resolve_beam_label(Fail, disp32K));
+}
+
+/* Note: This instruction leaves the untagged pointer to the tuple in
+ * ARG2. */
+void BeamModuleAssembler::emit_i_is_tagged_tuple_ff(const ArgLabel &NotTuple,
+                                                    const ArgLabel &NotRecord,
+                                                    const ArgSource &Src,
+                                                    const ArgWord &Arity,
+                                                    const ArgAtom &Tag) {
+    Label correct_arity = a.new_label();
+    auto src = load_source(Src, ARG1);
+
+    emit_is_boxed(resolve_beam_label(NotTuple, dispUnknown), Src, src.reg);
+
+    emit_untag_ptr(ARG1, src.reg);
+
+    /* It is safe to fetch the both the header word and the first
+     * element of the tuple because the empty tuple is always
+     * a literal that is padded so that the word after arity is
+     * allocated. */
+    a.ld(TMP1, ppc::Mem(ARG1));
+    a.ld(TMP2, ppc::Mem(ARG1, sizeof(Eterm)));
+
+    cmp_arg(TMP1, Arity);
+    a.beq(correct_arity);
+
+    /* Not a tuple or the wrong arity. Decide which. */
+    ERTS_CT_ASSERT(_TAG_HEADER_ARITYVAL == 0);
+    a.andi_rc(LR_TMP, TMP1, imm(_TAG_HEADER_MASK));
+    a.beq(resolve_beam_label(NotRecord, disp32K));
+    a.b(resolve_beam_label(NotTuple, disp32MB));
+
+    a.bind(correct_arity);
+    {
+        cmp_arg(TMP2, Tag);
+        a.bne(resolve_beam_label(NotRecord, disp32K));
+    }
+}
+
+/* Note: This instruction leaves the untagged pointer to the tuple in
+ * ARG1. */
+void BeamModuleAssembler::emit_i_is_tuple(const ArgLabel &Fail,
+                                          const ArgSource &Src) {
+    auto src = load_source(Src, ARG1);
+
+    emit_is_boxed(resolve_beam_label(Fail, dispUnknown), Src, src.reg);
+    emit_untag_ptr(ARG1, src.reg);
+
+    /* As an optimization for the `error | {ok, Value}` case, skip checking the
+     * header word when we know that the only possible boxed type is a tuple. */
+    if (masked_types<BeamTypeId::MaybeBoxed>(Src) == BeamTypeId::Tuple) {
+        comment("skipped header test since we know it's a tuple when boxed");
+    } else {
+        a.ld(TMP1, ppc::Mem(ARG1));
+        ERTS_CT_ASSERT(_TAG_HEADER_ARITYVAL == 0);
+        a.andi_rc(LR_TMP, TMP1, imm(_TAG_HEADER_MASK));
+        a.bne(resolve_beam_label(Fail, disp32K));
+    }
+}
+
+/* Note: This instruction leaves the untagged pointer to the tuple in
+ * ARG1. */
+void BeamModuleAssembler::emit_i_is_tuple_of_arity(const ArgLabel &Fail,
+                                                   const ArgSource &Src,
+                                                   const ArgWord &Arity) {
+    auto src = load_source(Src, ARG1);
+
+    emit_is_boxed(resolve_beam_label(Fail, dispUnknown), Src, src.reg);
+
+    emit_untag_ptr(ARG1, src.reg);
+
+    a.ld(TMP1, ppc::Mem(ARG1));
+    cmp_arg(TMP1, Arity);
+    a.bne(resolve_beam_label(Fail, disp32K));
+}
+
+/* Note: This instruction leaves the untagged pointer to the tuple in
+ * ARG1. */
+void BeamModuleAssembler::emit_i_is_tuple_of_arity_ff(const ArgLabel &NotTuple,
+                                                      const ArgLabel &BadArity,
+                                                      const ArgSource &Src,
+                                                      const ArgWord &Arity) {
+    auto src = load_source(Src, ARG1);
+
+    emit_is_boxed(resolve_beam_label(NotTuple, dispUnknown), Src, src.reg);
+
+    emit_untag_ptr(ARG1, src.reg);
+
+    a.ld(TMP1, ppc::Mem(ARG1));
+
+    /* As an optimization for the `error | {ok, Value}` case, skip checking the
+     * header word when we know that the only possible boxed type is a tuple. */
+    if (masked_types<BeamTypeId::MaybeBoxed>(Src) == BeamTypeId::Tuple) {
+        comment("skipped header test since we know it's a tuple when boxed");
+    } else {
+        ERTS_CT_ASSERT(_TAG_HEADER_ARITYVAL == 0);
+        a.andi_rc(LR_TMP, TMP1, imm(_TAG_HEADER_MASK));
+        a.bne(resolve_beam_label(NotTuple, disp32K));
+    }
+
+    cmp_arg(TMP1, Arity);
+    a.bne(resolve_beam_label(BadArity, disp32K));
+}
+
+/* Note: This instruction leaves the untagged pointer to the tuple in
+ * ARG1. */
+void BeamModuleAssembler::emit_i_test_arity(const ArgLabel &Fail,
+                                            const ArgSource &Src,
+                                            const ArgWord &Arity) {
+    auto src = load_source(Src, ARG1);
+    emit_untag_ptr(ARG1, src.reg);
+
+    a.ld(TMP1, ppc::Mem(ARG1));
+    cmp_arg(TMP1, Arity);
+    a.bne(resolve_beam_label(Fail, disp32K));
+}
+
 /* The reduction test of a function consists of the two instructions that
  * load the address of the function, the store that only exists when
  * allocation tags are enabled, the decrement, and the branch. */

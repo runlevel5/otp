@@ -880,38 +880,6 @@ void BeamModuleAssembler::emit_i_int_div(const ArgLabel &,
     emit_nyi("i_int_div");
 }
 
-void BeamModuleAssembler::emit_i_is_tagged_tuple(const ArgLabel &,
-                                                 const ArgSource &,
-                                                 const ArgWord &,
-                                                 const ArgAtom &) {
-    emit_nyi("i_is_tagged_tuple");
-}
-
-void BeamModuleAssembler::emit_i_is_tagged_tuple_ff(const ArgLabel &,
-                                                    const ArgLabel &,
-                                                    const ArgSource &,
-                                                    const ArgWord &,
-                                                    const ArgAtom &) {
-    emit_nyi("i_is_tagged_tuple_ff");
-}
-
-void BeamModuleAssembler::emit_i_is_tuple(const ArgLabel &, const ArgSource &) {
-    emit_nyi("i_is_tuple");
-}
-
-void BeamModuleAssembler::emit_i_is_tuple_of_arity(const ArgLabel &,
-                                                   const ArgSource &,
-                                                   const ArgWord &) {
-    emit_nyi("i_is_tuple_of_arity");
-}
-
-void BeamModuleAssembler::emit_i_is_tuple_of_arity_ff(const ArgLabel &,
-                                                      const ArgLabel &,
-                                                      const ArgSource &,
-                                                      const ArgWord &) {
-    emit_nyi("i_is_tuple_of_arity_ff");
-}
-
 void BeamModuleAssembler::emit_i_jump_on_val(const ArgSource &,
                                              const ArgVal &,
                                              const ArgWord &,
@@ -1044,12 +1012,6 @@ void BeamModuleAssembler::emit_i_signed_width(const ArgLabel &,
     emit_nyi("i_signed_width");
 }
 
-void BeamModuleAssembler::emit_i_test_arity(const ArgLabel &,
-                                            const ArgSource &,
-                                            const ArgWord &) {
-    emit_nyi("i_test_arity");
-}
-
 void BeamModuleAssembler::emit_i_unary_minus(const ArgLabel &,
                                              const ArgWord &,
                                              const ArgSource &,
@@ -1093,23 +1055,6 @@ void BeamModuleAssembler::emit_is_any_native_record(const ArgLabel &,
     emit_nyi("is_any_native_record");
 }
 
-void BeamModuleAssembler::emit_is_atom(const ArgLabel &, const ArgSource &) {
-    emit_nyi("is_atom");
-}
-
-void BeamModuleAssembler::emit_is_binary(const ArgLabel &, const ArgSource &) {
-    emit_nyi("is_binary");
-}
-
-void BeamModuleAssembler::emit_is_bitstring(const ArgLabel &,
-                                            const ArgSource &) {
-    emit_nyi("is_bitstring");
-}
-
-void BeamModuleAssembler::emit_is_boolean(const ArgLabel &, const ArgSource &) {
-    emit_nyi("is_boolean");
-}
-
 void BeamModuleAssembler::emit_is_eq(const ArgLabel &,
                                      const ArgSource &,
                                      const ArgSource &) {
@@ -1120,21 +1065,6 @@ void BeamModuleAssembler::emit_is_eq_exact(const ArgLabel &,
                                            const ArgSource &,
                                            const ArgSource &) {
     emit_nyi("is_eq_exact");
-}
-
-void BeamModuleAssembler::emit_is_float(const ArgLabel &, const ArgSource &) {
-    emit_nyi("is_float");
-}
-
-void BeamModuleAssembler::emit_is_function(const ArgLabel &,
-                                           const ArgRegister &) {
-    emit_nyi("is_function");
-}
-
-void BeamModuleAssembler::emit_is_function2(const ArgLabel &,
-                                            const ArgSource &,
-                                            const ArgSource &) {
-    emit_nyi("is_function2");
 }
 
 void BeamModuleAssembler::emit_is_ge(const ArgLabel &,
@@ -1180,22 +1110,10 @@ void BeamModuleAssembler::emit_is_int_in_range(const ArgLabel &,
     emit_nyi("is_int_in_range");
 }
 
-void BeamModuleAssembler::emit_is_integer(const ArgLabel &, const ArgSource &) {
-    emit_nyi("is_integer");
-}
-
-void BeamModuleAssembler::emit_is_list(const ArgLabel &, const ArgSource &) {
-    emit_nyi("is_list");
-}
-
 void BeamModuleAssembler::emit_is_lt(const ArgLabel &,
                                      const ArgSource &,
                                      const ArgSource &) {
     emit_nyi("is_lt");
-}
-
-void BeamModuleAssembler::emit_is_map(const ArgLabel &, const ArgSource &) {
-    emit_nyi("is_map");
 }
 
 void BeamModuleAssembler::emit_is_native_record(const ArgLabel &,
@@ -1217,40 +1135,10 @@ void BeamModuleAssembler::emit_is_ne_exact(const ArgLabel &,
     emit_nyi("is_ne_exact");
 }
 
-void BeamModuleAssembler::emit_is_nil(const ArgLabel &, const ArgRegister &) {
-    emit_nyi("is_nil");
-}
-
-void BeamModuleAssembler::emit_is_nonempty_list(const ArgLabel &,
-                                                const ArgRegister &) {
-    emit_nyi("is_nonempty_list");
-}
-
-void BeamModuleAssembler::emit_is_number(const ArgLabel &, const ArgSource &) {
-    emit_nyi("is_number");
-}
-
-void BeamModuleAssembler::emit_is_pid(const ArgLabel &, const ArgSource &) {
-    emit_nyi("is_pid");
-}
-
-void BeamModuleAssembler::emit_is_port(const ArgLabel &, const ArgSource &) {
-    emit_nyi("is_port");
-}
-
 void BeamModuleAssembler::emit_is_record_accessible(const ArgLabel &,
                                                     const ArgRegister &,
                                                     const ArgAtom &) {
     emit_nyi("is_record_accessible");
-}
-
-void BeamModuleAssembler::emit_is_reference(const ArgLabel &,
-                                            const ArgSource &) {
-    emit_nyi("is_reference");
-}
-
-void BeamModuleAssembler::emit_jump(const ArgLabel &) {
-    emit_nyi("jump");
 }
 
 void BeamModuleAssembler::emit_mark_unreachable() {
