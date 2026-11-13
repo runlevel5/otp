@@ -61,10 +61,6 @@ void BeamModuleAssembler::emit_coverage(void *coverage, Uint index, Uint size) {
  * Shared fragments.
  */
 
-void BeamGlobalAssembler::emit_apply_fun_shared() {
-    emit_nyi("apply_fun_shared");
-}
-
 void BeamGlobalAssembler::emit_arith_compare_shared() {
     emit_nyi("arith_compare_shared");
 }
@@ -145,10 +141,6 @@ void BeamGlobalAssembler::emit_debug_bp() {
     emit_nyi("debug_bp");
 }
 
-void BeamGlobalAssembler::emit_dispatch_save_calls_fun() {
-    emit_nyi("dispatch_save_calls_fun");
-}
-
 void BeamGlobalAssembler::emit_fconv_shared() {
     emit_nyi("fconv_shared");
 }
@@ -159,10 +151,6 @@ void BeamGlobalAssembler::emit_get_sint64_shared() {
 
 void BeamGlobalAssembler::emit_handle_and_error() {
     emit_nyi("handle_and_error");
-}
-
-void BeamGlobalAssembler::emit_handle_call_fun_error() {
-    emit_nyi("handle_call_fun_error");
 }
 
 void BeamGlobalAssembler::emit_handle_element_error_shared() {
@@ -326,10 +314,6 @@ void BeamGlobalAssembler::emit_raise_shared() {
 
 void BeamGlobalAssembler::emit_store_unaligned() {
     emit_nyi("store_unaligned");
-}
-
-void BeamGlobalAssembler::emit_unloaded_fun() {
-    emit_nyi("unloaded_fun");
 }
 
 void BeamGlobalAssembler::emit_unary_minus_body_shared() {
@@ -552,18 +536,6 @@ void BeamModuleAssembler::emit_get_record_field(const ArgLabel &,
     emit_nyi("get_record_field");
 }
 
-void BeamModuleAssembler::emit_i_apply_fun() {
-    emit_nyi("i_apply_fun");
-}
-
-void BeamModuleAssembler::emit_i_apply_fun_last(const ArgWord &) {
-    emit_nyi("i_apply_fun_last");
-}
-
-void BeamModuleAssembler::emit_i_apply_fun_only() {
-    emit_nyi("i_apply_fun_only");
-}
-
 void BeamModuleAssembler::emit_i_band(const ArgLabel &,
                                       const ArgWord &,
                                       const ArgSource &,
@@ -727,28 +699,6 @@ void BeamModuleAssembler::emit_i_bxor(const ArgLabel &,
     emit_nyi("i_bxor");
 }
 
-void BeamModuleAssembler::emit_i_call_fun(const ArgWord &) {
-    emit_nyi("i_call_fun");
-}
-
-void BeamModuleAssembler::emit_i_call_fun2(const ArgVal &,
-                                           const ArgWord &,
-                                           const ArgRegister &) {
-    emit_nyi("i_call_fun2");
-}
-
-void BeamModuleAssembler::emit_i_call_fun2_last(const ArgVal &,
-                                                const ArgWord &,
-                                                const ArgRegister &,
-                                                const ArgWord &) {
-    emit_nyi("i_call_fun2_last");
-}
-
-void BeamModuleAssembler::emit_i_call_fun_last(const ArgWord &,
-                                               const ArgWord &) {
-    emit_nyi("i_call_fun_last");
-}
-
 void BeamModuleAssembler::emit_i_call_trace_return() {
     emit_nyi("i_call_trace_return");
 }
@@ -872,18 +822,6 @@ void BeamModuleAssembler::emit_i_int_div(const ArgLabel &,
     emit_nyi("i_int_div");
 }
 
-void BeamModuleAssembler::emit_i_lambda_error(const ArgWord &) {
-    emit_nyi("i_lambda_error");
-}
-
-void BeamModuleAssembler::emit_i_lambda_trampoline(const ArgLambda &Lambda,
-                                                   const ArgLabel &,
-                                                   const ArgWord &,
-                                                   const ArgWord &) {
-    a.bind(lambdas[Lambda.get()].trampoline);
-    emit_nyi("i_lambda_trampoline");
-}
-
 void BeamModuleAssembler::emit_i_line_breakpoint_trampoline() {
     emit_nyi("i_line_breakpoint_trampoline");
 }
@@ -894,14 +832,6 @@ void BeamModuleAssembler::emit_i_m_div(const ArgLabel &,
                                        const ArgSource &,
                                        const ArgRegister &) {
     emit_nyi("i_m_div");
-}
-
-void BeamModuleAssembler::emit_i_make_fun3(const ArgLambda &,
-                                           const ArgRegister &,
-                                           const ArgWord &,
-                                           const ArgWord &,
-                                           const Span<const ArgVal> &) {
-    emit_nyi("i_make_fun3");
 }
 
 void BeamModuleAssembler::emit_i_minus(const ArgLabel &,

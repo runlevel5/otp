@@ -1273,6 +1273,9 @@ protected:
     ppc::Mem emit_variable_apply(bool includeI);
     ppc::Mem emit_fixed_apply(const ArgWord &arity, bool includeI);
 
+    ppc::Gp emit_call_fun(bool skip_box_test = false,
+                          bool skip_header_test = false);
+
     void emit_return_do(bool set_I);
     void emit_dispatch_return(bool set_I);
 
