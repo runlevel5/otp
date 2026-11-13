@@ -225,6 +225,449 @@ void BeamModuleAssembler::emit_continue_exit() {
     a.b(resolve_fragment(ga->get_do_schedule(), disp32MB));
 }
 
+void BeamModuleAssembler::emit_get_list(const ArgRegister &Src,
+                                        const ArgRegister &Hd,
+                                        const ArgRegister &Tl) {
+    auto src = load_source(Src);
+    auto hd = init_destination(Hd, TMP2);
+    auto tl = init_destination(Tl, TMP3);
+
+    if (hd.reg == tl.reg) {
+        /* Produce the same result as the interpreter. */
+        ppc::Gp cons_ptr = emit_ptr_val(TMP1, src.reg);
+
+        load_mem(tl.reg, getCDRRef(cons_ptr));
+        flush_var(tl);
+    } else {
+        preserve_cache([&]() {
+#if defined(TAG_LITERAL_PTR)
+            /* The pointer may carry the literal tag as well, so we get rid
+             * of all tag bits before using it. */
+            emit_untag_ptr(TMP1, src.reg);
+            a.ld(tl.reg, ppc::Mem(TMP1, sizeof(Eterm)));
+            a.ld(hd.reg, ppc::Mem(TMP1));
+#else
+            /* The tail is likely to be the next address that is followed, so
+             * it is loaded straight from the tagged pointer with the
+             * displacement in an index register, which does not delay it.
+             * The head is loaded through an untagged copy of the pointer,
+             * which is as fast as anything when the value is not an
+             * address.
+             *
+             * Note that the tagged pointer is not used after the tail has
+             * been loaded, as the two may be in the same register. */
+            a.li(SUPER_TMP, imm(sizeof(Eterm) - TAG_PRIMARY_LIST));
+            a.addi(TMP1, src.reg, imm(-TAG_PRIMARY_LIST));
+            a.ldx(tl.reg, ppc::Mem(src.reg, SUPER_TMP));
+            a.ld(hd.reg, ppc::Mem(TMP1));
+#endif
+        });
+        flush_vars(hd, tl);
+    }
+}
+
+void BeamModuleAssembler::emit_get_hd(const ArgRegister &Src,
+                                      const ArgRegister &Hd) {
+    auto src = load_source(Src);
+    auto hd = init_destination(Hd, TMP2);
+    ppc::Gp cons_ptr = emit_ptr_val(TMP1, src.reg);
+
+    load_mem(hd.reg, getCARRef(cons_ptr));
+    flush_var(hd);
+}
+
+void BeamModuleAssembler::emit_get_tl(const ArgRegister &Src,
+                                      const ArgRegister &Tl) {
+    auto src = load_source(Src);
+    auto tl = init_destination(Tl, TMP2);
+    ppc::Gp cons_ptr = emit_ptr_val(TMP1, src.reg);
+
+    load_mem(tl.reg, getCDRRef(cons_ptr));
+    flush_var(tl);
+}
+
+void BeamModuleAssembler::emit_i_get(const ArgSource &Src,
+                                     const ArgRegister &Dst) {
+    mov_arg(ARG2, Src);
+
+    emit_enter_runtime();
+
+    a.mr(ARG1, c_p);
+    runtime_call<Eterm (*)(Process *, Eterm), erts_pd_hash_get>();
+
+    emit_leave_runtime();
+
+    mov_arg(Dst, ARG1);
+}
+
+void BeamModuleAssembler::emit_i_get_hash(const ArgConstant &Src,
+                                          const ArgWord &Hash,
+                                          const ArgRegister &Dst) {
+    mov_arg(ARG2, Hash);
+    mov_arg(ARG3, Src);
+
+    emit_enter_runtime();
+
+    a.mr(ARG1, c_p);
+    runtime_call<Eterm (*)(Process *, erts_ihash_t, Eterm),
+                 erts_pd_hash_get_with_hx>();
+
+    emit_leave_runtime();
+
+    mov_arg(Dst, ARG1);
+}
+
+/* Store the untagged pointer to a tuple in ARG1. */
+void BeamModuleAssembler::emit_load_tuple_ptr(const ArgSource &Src) {
+    auto src = load_source(Src);
+
+    untag_ptr_preserve_cache(ARG1, src.reg);
+}
+
+#ifdef DEBUG
+/* Emit an assertion to ensure that tuple_reg points into the same
+ * tuple as Src. */
+void BeamModuleAssembler::emit_tuple_assertion(const ArgSource &Src,
+                                               ppc::Gp tuple_reg) {
+    Label ok = a.new_label(), fatal = a.new_label();
+    ASSERT(tuple_reg != TMP1);
+    mov_arg(TMP1, Src);
+    emit_is_boxed(fatal, TMP1);
+    emit_untag_ptr(TMP1, TMP1);
+    a.cmpd(TMP1, tuple_reg);
+    a.beq(ok);
+
+    a.bind(fatal);
+    udf(0xaaaa);
+    a.bind(ok);
+}
+#endif
+
+/* Fetch an element from the tuple pointed to by the untagged pointer
+ * in ARG1. */
+void BeamModuleAssembler::emit_i_get_tuple_element(const ArgSource &Src,
+                                                   const ArgWord &Element,
+                                                   const ArgRegister &Dst) {
+#ifdef DEBUG
+    emit_tuple_assertion(Src, ARG1);
+#endif
+
+    auto dst = init_destination(Dst, TMP1);
+    load_mem(dst.reg, ppc::Mem(ARG1, Element.get()));
+    flush_var(dst);
+}
+
+void BeamModuleAssembler::emit_get_tuple_element_swap(
+        const ArgSource &Src,
+        const ArgWord &Element,
+        const ArgRegister &Dst,
+        const ArgRegister &OtherDst) {
+#ifdef DEBUG
+    emit_tuple_assertion(Src, ARG1);
+#endif
+
+    mov_arg(Dst, OtherDst);
+
+    auto dst = init_destination(OtherDst, TMP1);
+    load_mem(dst.reg, ppc::Mem(ARG1, Element.get()));
+    flush_var(dst);
+}
+
+/* Fetch two consecutive tuple elements from the tuple pointed to by
+ * the boxed pointer in ARG1. */
+void BeamModuleAssembler::emit_get_two_tuple_elements(const ArgSource &Src,
+                                                      const ArgWord &Element,
+                                                      const ArgRegister &Dst1,
+                                                      const ArgRegister &Dst2) {
+#ifdef DEBUG
+    emit_tuple_assertion(Src, ARG1);
+#endif
+
+    auto dst1 = init_destination(Dst1, TMP1);
+    auto dst2 = init_destination(Dst2, TMP2);
+
+    load_mem(dst1.reg, ppc::Mem(ARG1, Element.get()));
+    load_mem(dst2.reg, ppc::Mem(ARG1, Element.get() + sizeof(Eterm)));
+    flush_vars(dst1, dst2);
+}
+
+void BeamModuleAssembler::emit_init_yregs(const ArgWord &Size,
+                                          const Span<const ArgVal> &args) {
+    unsigned count = Size.get();
+    ASSERT(count == args.size());
+
+    if (count > 0) {
+        mov_imm(TMP1, NIL);
+    }
+
+    for (unsigned i = 0; i < count; i++) {
+        a.std(TMP1, getYRef(args[i].as<ArgYRegister>().get()));
+    }
+}
+
+void BeamModuleAssembler::emit_trim(const ArgWord &Words,
+                                    const ArgWord &Remaining) {
+    trim_preserve_cache(Words);
+}
+
+void BeamModuleAssembler::emit_i_move(const ArgSource &Src,
+                                      const ArgRegister &Dst) {
+    mov_arg(Dst, Src);
+}
+
+void BeamModuleAssembler::emit_move_two_trim(const ArgYRegister &Src1,
+                                             const ArgRegister &Dst1,
+                                             const ArgYRegister &Src2,
+                                             const ArgRegister &Dst2,
+                                             const ArgWord &Words) {
+    auto dst1 = init_destination(Dst1, TMP1);
+    auto dst2 = init_destination(Dst2, TMP2);
+
+    a.ld(dst1.reg, getArgRef(Src1));
+    a.ld(dst2.reg, getArgRef(Src2));
+    flush_vars(dst1, dst2);
+
+    trim_preserve_cache(Words);
+}
+
+void BeamModuleAssembler::emit_move_trim(const ArgSource &Src,
+                                         const ArgRegister &Dst,
+                                         const ArgWord &Words) {
+    ASSERT(Words.get() <= 1023);
+
+    mov_arg(Dst, Src);
+    trim_preserve_cache(Words);
+}
+
+void BeamModuleAssembler::emit_store_two_values(const ArgSource &Src1,
+                                                const ArgRegister &Dst1,
+                                                const ArgSource &Src2,
+                                                const ArgRegister &Dst2) {
+    auto [src1, src2] = load_sources(Src1, TMP1, Src2, TMP2);
+    auto dst1 = init_destination(Dst1, src1.reg);
+    auto dst2 = init_destination(Dst2, src2.reg);
+
+    ASSERT(!isRegisterBacked(Dst1));
+    ASSERT(!isRegisterBacked(Dst2));
+
+    flush_vars(dst1, dst2);
+}
+
+void BeamModuleAssembler::emit_load_two_xregs(const ArgRegister &Src1,
+                                              const ArgXRegister &Dst1,
+                                              const ArgRegister &Src2,
+                                              const ArgXRegister &Dst2) {
+    auto dst1 = init_destination(Dst1, TMP1);
+    auto dst2 = init_destination(Dst2, TMP2);
+
+    ASSERT(!isRegisterBacked(Src1));
+    ASSERT(!isRegisterBacked(Src2));
+
+    a.ld(dst1.reg, getArgRef(Src1));
+    a.ld(dst2.reg, getArgRef(Src2));
+    flush_vars(dst1, dst2);
+}
+
+void BeamModuleAssembler::emit_swap(const ArgRegister &R1,
+                                    const ArgRegister &R2) {
+    if (isRegisterBacked(R1)) {
+        /* The temporary register is not used as R1 is in a register. */
+        auto r1 = load_source(R1, SUPER_TMP);
+        mov_arg(TMP1, R2);
+        mov_arg(R2, R1);
+        a.mr(r1.reg, TMP1);
+    } else if (isRegisterBacked(R2)) {
+        return emit_swap(R2, R1);
+    } else {
+        /* Both BEAM registers are stored in memory. */
+        auto [r1, r2] = load_sources(R1, TMP1, R2, TMP2);
+        auto dst1 = init_destination(R2, r1.reg);
+        auto dst2 = init_destination(R1, r2.reg);
+        flush_vars(dst1, dst2);
+    }
+}
+
+void BeamModuleAssembler::emit_swap2(const ArgRegister &R1,
+                                     const ArgRegister &R2,
+                                     const ArgRegister &R3) {
+    auto [arg1, arg2] = load_sources(R1, TMP1, R2, TMP2);
+    auto arg3 = load_source(R3, TMP3);
+
+    mov_var(TMP4, arg1);
+    mov_var(arg1, arg2);
+    mov_var(arg2, arg3);
+    mov_var(arg3, TMP4);
+
+    flush_vars(arg1, arg2, arg3);
+}
+
+void BeamModuleAssembler::emit_swap3(const ArgRegister &R1,
+                                     const ArgRegister &R2,
+                                     const ArgRegister &R3,
+                                     const ArgRegister &R4) {
+    auto [arg1, arg2] = load_sources(R1, TMP1, R2, TMP2);
+    auto [arg3, arg4] = load_sources(R3, TMP3, R4, TMP4);
+
+    mov_var(TMP5, arg1);
+    mov_var(arg1, arg2);
+    mov_var(arg2, arg3);
+    mov_var(arg3, arg4);
+    mov_var(arg4, TMP5);
+
+    flush_vars(arg1, arg2, arg3);
+    flush_var(arg4);
+}
+
+void BeamModuleAssembler::emit_swap4(const ArgRegister &R1,
+                                     const ArgRegister &R2,
+                                     const ArgRegister &R3,
+                                     const ArgRegister &R4,
+                                     const ArgRegister &R5) {
+    auto [arg1, arg2] = load_sources(R1, TMP1, R2, TMP2);
+    auto [arg3, arg4] = load_sources(R3, TMP3, R4, TMP4);
+    auto arg5 = load_source(R5, TMP5);
+
+    mov_var(TMP6, arg1);
+    mov_var(arg1, arg2);
+    mov_var(arg2, arg3);
+    mov_var(arg3, arg4);
+    mov_var(arg4, arg5);
+    mov_var(arg5, TMP6);
+
+    flush_vars(arg1, arg2, arg3);
+    flush_vars(arg4, arg5);
+}
+
+void BeamModuleAssembler::emit_node(const ArgRegister &Dst) {
+    load_constant(TMP1, &erts_this_node);
+    a.ld(TMP1, ppc::Mem(TMP1));
+    mov_arg(Dst, ppc::Mem(TMP1, offsetof(ErlNode, sysname)));
+}
+
+void BeamModuleAssembler::emit_put_list(const ArgSource &Hd,
+                                        const ArgSource &Tl,
+                                        const ArgRegister &Dst) {
+    auto [hd, tl] = load_sources(Hd, TMP1, Tl, TMP2);
+    auto hd_reg = hd.reg;
+    auto tl_reg = tl.reg;
+    auto dst = init_destination(Dst, TMP3);
+
+    preserve_cache([&]() {
+        a.std(hd_reg, ppc::Mem(HTOP));
+        a.std(tl_reg, ppc::Mem(HTOP, sizeof(Eterm)));
+        a.addi(dst.reg, HTOP, imm(TAG_PRIMARY_LIST));
+        a.addi(HTOP, HTOP, imm(sizeof(Eterm[2])));
+    });
+
+    flush_var(dst);
+}
+
+void BeamModuleAssembler::emit_put_list_deallocate(const ArgSource &Hd,
+                                                   const ArgSource &Tl,
+                                                   const ArgRegister &Dst,
+                                                   const ArgWord &Deallocate) {
+    Sint dealloc = Deallocate.get() * sizeof(Eterm);
+    auto dst = init_destination(Dst, TMP3);
+
+    ASSERT(dealloc < MAX_REG * sizeof(Eterm));
+
+    auto [hd, tl] = load_sources(Hd, TMP1, Tl, TMP2);
+
+    a.std(hd.reg, ppc::Mem(HTOP));
+    a.std(tl.reg, ppc::Mem(HTOP, sizeof(Eterm)));
+    a.addi(dst.reg, HTOP, imm(TAG_PRIMARY_LIST));
+    a.addi(HTOP, HTOP, imm(sizeof(Eterm[2])));
+
+    flush_var(dst);
+
+    if (dealloc > 0) {
+        add(E, E, dealloc);
+    }
+}
+
+void BeamModuleAssembler::emit_put_list2(const ArgSource &Hd1,
+                                         const ArgSource &Hd2,
+                                         const ArgSource &Tl,
+                                         const ArgRegister &Dst) {
+    auto [hd1, hd2] = load_sources(Hd1, TMP1, Hd2, TMP2);
+    auto tl = load_source(Tl, TMP3);
+    auto dst = init_destination(Dst, TMP4);
+
+    /* All sources are stored before the destination is written, as it may
+     * be in the same register as one of them. */
+    a.std(hd1.reg, ppc::Mem(HTOP));
+    a.std(tl.reg, ppc::Mem(HTOP, sizeof(Eterm)));
+    a.std(hd2.reg, ppc::Mem(HTOP, sizeof(Eterm[2])));
+
+    a.addi(dst.reg, HTOP, imm(TAG_PRIMARY_LIST));
+    a.std(dst.reg, ppc::Mem(HTOP, sizeof(Eterm[3])));
+    a.addi(dst.reg, HTOP, imm(sizeof(Eterm[2]) + TAG_PRIMARY_LIST));
+    a.addi(HTOP, HTOP, imm(sizeof(Eterm[4])));
+
+    flush_var(dst);
+}
+
+void BeamModuleAssembler::emit_put_tuple2(const ArgRegister &Dst,
+                                          const ArgWord &Arity,
+                                          const Span<const ArgVal> &args) {
+    ASSERT(arityval(Arity.get()) == args.size());
+
+    std::vector<ArgVal> data;
+    data.reserve(args.size() + 1);
+    data.push_back(Arity);
+    data.insert(data.end(), std::begin(args), std::end(args));
+
+    size_t size = data.size();
+    ImmedRegCache<12> values(*this,
+                             ARG3,
+                             ARG4,
+                             ARG5,
+                             ARG6,
+                             ARG7,
+                             ARG8,
+                             TMP1,
+                             TMP2,
+                             TMP3,
+                             TMP4,
+                             TMP5,
+                             TMP6);
+
+    /* Number of bytes that have been written but not yet added to HTOP. */
+    ssize_t offset = 0;
+
+    for (size_t i = 0; i < size; i++) {
+        ppc::Gp reg;
+
+        if ((i % 128) == 0) {
+            check_pending_stubs();
+        }
+
+        if (data[i].isImmed()) {
+            reg = values.load_value(data[i].as<ArgImmed>().get());
+        } else {
+            reg = load_source(data[i], ARG1).reg;
+        }
+
+        if (offset + (ssize_t)sizeof(Eterm) > MAX_DISPLACEMENT) {
+            add(HTOP, HTOP, offset);
+            offset = 0;
+        }
+
+        a.std(reg, ppc::Mem(HTOP, offset));
+        offset += sizeof(Eterm);
+    }
+
+    add(HTOP, HTOP, offset);
+
+    auto ptr = init_destination(Dst, TMP1);
+    sub(ptr.reg, HTOP, size * sizeof(Eterm) - TAG_PRIMARY_BOXED);
+    flush_var(ptr);
+}
+
+void BeamModuleAssembler::emit_self(const ArgRegister &Dst) {
+    mov_arg(Dst, ppc::Mem(c_p, offsetof(Process, common.id)));
+}
+
 /* The reduction test of a function consists of the two instructions that
  * load the address of the function, the store that only exists when
  * allocation tags are enabled, the decrement, and the branch. */

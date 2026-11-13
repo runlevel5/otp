@@ -625,42 +625,12 @@ void BeamModuleAssembler::emit_fstore(const ArgFRegister &,
     emit_nyi("fstore");
 }
 
-void BeamModuleAssembler::emit_get_hd(const ArgRegister &,
-                                      const ArgRegister &) {
-    emit_nyi("get_hd");
-}
-
-void BeamModuleAssembler::emit_get_list(const ArgRegister &,
-                                        const ArgRegister &,
-                                        const ArgRegister &) {
-    emit_nyi("get_list");
-}
-
 void BeamModuleAssembler::emit_get_record_field(const ArgLabel &,
                                                 const ArgRegister &,
                                                 const ArgConstant &,
                                                 const ArgAtom &,
                                                 const ArgRegister &) {
     emit_nyi("get_record_field");
-}
-
-void BeamModuleAssembler::emit_get_tl(const ArgRegister &,
-                                      const ArgRegister &) {
-    emit_nyi("get_tl");
-}
-
-void BeamModuleAssembler::emit_get_tuple_element_swap(const ArgSource &,
-                                                      const ArgWord &,
-                                                      const ArgRegister &,
-                                                      const ArgRegister &) {
-    emit_nyi("get_tuple_element_swap");
-}
-
-void BeamModuleAssembler::emit_get_two_tuple_elements(const ArgSource &,
-                                                      const ArgWord &,
-                                                      const ArgRegister &,
-                                                      const ArgRegister &) {
-    emit_nyi("get_two_tuple_elements");
 }
 
 void BeamModuleAssembler::emit_i_apply_fun() {
@@ -961,16 +931,6 @@ void BeamModuleAssembler::emit_i_fsub(const ArgFRegister &,
     emit_nyi("i_fsub");
 }
 
-void BeamModuleAssembler::emit_i_get(const ArgSource &, const ArgRegister &) {
-    emit_nyi("i_get");
-}
-
-void BeamModuleAssembler::emit_i_get_hash(const ArgConstant &,
-                                          const ArgWord &,
-                                          const ArgRegister &) {
-    emit_nyi("i_get_hash");
-}
-
 void BeamModuleAssembler::emit_i_get_local_record_elements(
         const ArgLiteral &,
         const ArgRegister &,
@@ -1007,12 +967,6 @@ void BeamModuleAssembler::emit_i_get_record_elements(
         const ArgWord &,
         const Span<const ArgVal> &) {
     emit_nyi("i_get_record_elements");
-}
-
-void BeamModuleAssembler::emit_i_get_tuple_element(const ArgSource &,
-                                                   const ArgWord &,
-                                                   const ArgRegister &) {
-    emit_nyi("i_get_tuple_element");
 }
 
 void BeamModuleAssembler::emit_i_hibernate() {
@@ -1125,10 +1079,6 @@ void BeamModuleAssembler::emit_i_minus(const ArgLabel &,
                                        const ArgSource &,
                                        const ArgRegister &) {
     emit_nyi("i_minus");
-}
-
-void BeamModuleAssembler::emit_i_move(const ArgSource &, const ArgRegister &) {
-    emit_nyi("i_move");
 }
 
 void BeamModuleAssembler::emit_i_mul_add(const ArgLabel &,
@@ -1257,11 +1207,6 @@ void BeamModuleAssembler::emit_i_update_native_record(
 
 void BeamModuleAssembler::emit_if_end() {
     emit_nyi("if_end");
-}
-
-void BeamModuleAssembler::emit_init_yregs(const ArgWord &,
-                                          const Span<const ArgVal> &) {
-    emit_nyi("init_yregs");
 }
 
 void BeamModuleAssembler::emit_is_any_native_record(const ArgLabel &,
@@ -1429,37 +1374,12 @@ void BeamModuleAssembler::emit_jump(const ArgLabel &) {
     emit_nyi("jump");
 }
 
-void BeamModuleAssembler::emit_load_tuple_ptr(const ArgSource &) {
-    emit_nyi("load_tuple_ptr");
-}
-
-void BeamModuleAssembler::emit_load_two_xregs(const ArgRegister &,
-                                              const ArgXRegister &,
-                                              const ArgRegister &,
-                                              const ArgXRegister &) {
-    emit_nyi("load_two_xregs");
-}
-
 void BeamModuleAssembler::emit_loop_rec_end(const ArgLabel &) {
     emit_nyi("loop_rec_end");
 }
 
 void BeamModuleAssembler::emit_mark_unreachable() {
     emit_nyi("mark_unreachable");
-}
-
-void BeamModuleAssembler::emit_move_trim(const ArgSource &,
-                                         const ArgRegister &,
-                                         const ArgWord &) {
-    emit_nyi("move_trim");
-}
-
-void BeamModuleAssembler::emit_move_two_trim(const ArgYRegister &,
-                                             const ArgRegister &,
-                                             const ArgYRegister &,
-                                             const ArgRegister &,
-                                             const ArgWord &) {
-    emit_nyi("move_two_trim");
 }
 
 void BeamModuleAssembler::emit_new_map(const ArgRegister &,
@@ -1473,10 +1393,6 @@ void BeamModuleAssembler::emit_nif_start() {
     emit_nyi("nif_start");
 }
 
-void BeamModuleAssembler::emit_node(const ArgRegister &) {
-    emit_nyi("node");
-}
-
 void BeamModuleAssembler::emit_nofail_bif1(const ArgSource &,
                                            const ArgWord &,
                                            const ArgRegister &) {
@@ -1488,32 +1404,6 @@ void BeamModuleAssembler::emit_nofail_bif2(const ArgSource &,
                                            const ArgWord &,
                                            const ArgRegister &) {
     emit_nyi("nofail_bif2");
-}
-
-void BeamModuleAssembler::emit_put_list(const ArgSource &,
-                                        const ArgSource &,
-                                        const ArgRegister &) {
-    emit_nyi("put_list");
-}
-
-void BeamModuleAssembler::emit_put_list2(const ArgSource &,
-                                         const ArgSource &,
-                                         const ArgSource &,
-                                         const ArgRegister &) {
-    emit_nyi("put_list2");
-}
-
-void BeamModuleAssembler::emit_put_list_deallocate(const ArgSource &,
-                                                   const ArgSource &,
-                                                   const ArgRegister &,
-                                                   const ArgWord &) {
-    emit_nyi("put_list_deallocate");
-}
-
-void BeamModuleAssembler::emit_put_tuple2(const ArgRegister &,
-                                          const ArgWord &,
-                                          const Span<const ArgVal> &) {
-    emit_nyi("put_tuple2");
 }
 
 void BeamModuleAssembler::emit_raise(const ArgSource &, const ArgSource &) {
@@ -1549,10 +1439,6 @@ void BeamModuleAssembler::emit_return_trace() {
     emit_nyi("return_trace");
 }
 
-void BeamModuleAssembler::emit_self(const ArgRegister &) {
-    emit_nyi("self");
-}
-
 void BeamModuleAssembler::emit_send() {
     emit_nyi("send");
 }
@@ -1561,38 +1447,6 @@ void BeamModuleAssembler::emit_set_tuple_element(const ArgSource &,
                                                  const ArgRegister &,
                                                  const ArgWord &) {
     emit_nyi("set_tuple_element");
-}
-
-void BeamModuleAssembler::emit_store_two_values(const ArgSource &,
-                                                const ArgRegister &,
-                                                const ArgSource &,
-                                                const ArgRegister &) {
-    emit_nyi("store_two_values");
-}
-
-void BeamModuleAssembler::emit_swap(const ArgRegister &, const ArgRegister &) {
-    emit_nyi("swap");
-}
-
-void BeamModuleAssembler::emit_swap2(const ArgRegister &,
-                                     const ArgRegister &,
-                                     const ArgRegister &) {
-    emit_nyi("swap2");
-}
-
-void BeamModuleAssembler::emit_swap3(const ArgRegister &,
-                                     const ArgRegister &,
-                                     const ArgRegister &,
-                                     const ArgRegister &) {
-    emit_nyi("swap3");
-}
-
-void BeamModuleAssembler::emit_swap4(const ArgRegister &,
-                                     const ArgRegister &,
-                                     const ArgRegister &,
-                                     const ArgRegister &,
-                                     const ArgRegister &) {
-    emit_nyi("swap4");
 }
 
 void BeamModuleAssembler::emit_system_limit_body() {
@@ -1605,10 +1459,6 @@ void BeamModuleAssembler::emit_timeout() {
 
 void BeamModuleAssembler::emit_timeout_locked() {
     emit_nyi("timeout_locked");
-}
-
-void BeamModuleAssembler::emit_trim(const ArgWord &, const ArgWord &) {
-    emit_nyi("trim");
 }
 
 void BeamModuleAssembler::emit_try_case(const ArgYRegister &) {

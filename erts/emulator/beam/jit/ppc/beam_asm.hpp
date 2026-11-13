@@ -273,14 +273,44 @@ protected:
         aligned_call(Target);
     }
 
-    /* Loads a 64-bit value from `mem`, which is either a base register with a
-     * displacement that is a multiple of 4, or a base and an index
-     * register. */
+    /* Loads a 64-bit value from `mem`, which is either a base and an index
+     * register, or a base register with any displacement.
+     *
+     * A 64-bit load can only encode a displacement that is a multiple of 4,
+     * which the displacement into a tagged pointer never is. All other
+     * displacements are loaded into SUPER_TMP and used as an index, which
+     * keeps the instruction that computes the address out of the dependency
+     * chain when following pointers. */
     void load_mem(ppc::Gp to, ppc::Mem mem) {
+        int64_t offset = mem.offset();
+
         if (mem.has_index()) {
             a.ldx(to, mem);
-        } else {
+        } else if (Support::is_int_n<16>(offset) && (offset & 3) == 0) {
             a.ld(to, mem);
+        } else {
+            ppc::Gp base = ppc::Gp::make_r64(mem.base_id());
+
+            ASSERT(base != SUPER_TMP);
+            mov_imm(SUPER_TMP, offset);
+            a.ldx(to, ppc::Mem(base, SUPER_TMP));
+        }
+    }
+
+    /* Stores a 64-bit value to `mem`, see `load_mem` for details. */
+    void store_mem(ppc::Gp from, ppc::Mem mem) {
+        int64_t offset = mem.offset();
+
+        if (mem.has_index()) {
+            a.stdx(from, mem);
+        } else if (Support::is_int_n<16>(offset) && (offset & 3) == 0) {
+            a.std(from, mem);
+        } else {
+            ppc::Gp base = ppc::Gp::make_r64(mem.base_id());
+
+            ASSERT(base != SUPER_TMP && from != SUPER_TMP);
+            mov_imm(SUPER_TMP, offset);
+            a.stdx(from, ppc::Mem(base, SUPER_TMP));
         }
     }
 
@@ -1141,6 +1171,50 @@ public:
     void patchStrings(char *rw_base, const byte *string);
 
 protected:
+    void emit_is_cons(Label Fail, ppc::Gp Src) {
+        preserve_cache([&]() {
+            BeamAssembler::emit_is_cons(Fail, Src);
+        });
+    }
+
+    void emit_is_not_cons(Label Fail, ppc::Gp Src) {
+        preserve_cache([&]() {
+            BeamAssembler::emit_is_not_cons(Fail, Src);
+        });
+    }
+
+    void emit_is_list(Label Fail, ppc::Gp Src) {
+        preserve_cache([&]() {
+            /* The value is a list if it is a cons cell or NIL. Both tests
+             * are done before branching on their combined result. */
+            a.andi_rc(LR_TMP, Src, imm(_TAG_PRIMARY_MASK - TAG_PRIMARY_LIST));
+            cmp(Src, NIL, ppc::cr1);
+            a.cror(ppc::cr0.eq(), ppc::cr0.eq(), ppc::cr1.eq());
+            a.bne(Fail);
+        });
+    }
+
+    void emit_is_boxed(Label Fail, ppc::Gp Src) {
+        preserve_cache([&]() {
+            BeamAssembler::emit_is_boxed(Fail, Src);
+        });
+    }
+
+    void emit_is_boxed(Label Fail, const ArgVal &Arg, ppc::Gp Src) {
+        if (always_one_of<BeamTypeId::AlwaysBoxed>(Arg)) {
+            comment("skipped box test since argument is always boxed");
+            return;
+        }
+
+        preserve_cache([&]() {
+            BeamAssembler::emit_is_boxed(Fail, Src);
+        });
+    }
+
+#ifdef DEBUG
+    void emit_tuple_assertion(const ArgSource &Src, ppc::Gp tuple_reg);
+#endif
+
     void emit_gc_test(const ArgWord &Stack,
                       const ArgWord &Heap,
                       const ArgWord &Live);
