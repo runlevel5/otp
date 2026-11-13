@@ -3119,6 +3119,15 @@ AS_IF([test ${enable_jit} != no],
               ;;
            esac
            ;;
+        ppc64le)
+           # The PPC64 JIT is under development, so it is only enabled when
+           # explicitly asked for.
+           if test ${enable_jit} = yes; then
+             JIT_ARCH=ppc
+           else
+             enable_jit=no
+           fi
+           ;;
         *)
            if test ${enable_jit} = yes; then
              AC_MSG_ERROR([JIT only works on x86 64-bit and ARM 64-bit])
@@ -3245,6 +3254,11 @@ AS_IF([test ${enable_jit} != no],
     arm)
       # ARM JIT doesn't support native stack due to its 16-byte alignment
       # requirement.
+      enable_native_stack=no
+      ;;
+    ppc)
+      # PPC JIT keeps the Erlang stack apart from the native stack, like the
+      # ARM JIT.
       enable_native_stack=no
       ;;
     *)

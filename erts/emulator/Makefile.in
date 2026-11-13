@@ -478,11 +478,13 @@ CREATE_DIRS+=$(OBJDIR)/asmjit/ \
 	$(OBJDIR)/asmjit/core \
 	$(OBJDIR)/asmjit/support \
 	$(OBJDIR)/asmjit/arm \
+	$(OBJDIR)/asmjit/ppc \
 	$(OBJDIR)/asmjit/x86
 CREATE_DIRS+=$(TTF_DIR)/asmjit \
 	$(TTF_DIR)/asmjit/core \
 	$(TTF_DIR)/asmjit/support \
 	$(TTF_DIR)/asmjit/arm \
+	$(TTF_DIR)/asmjit/ppc \
 	$(TTF_DIR)/asmjit/x86
 endif
 
@@ -779,14 +781,15 @@ $(UTILS_YCF_OUTPUT): beam/utils.c $(ERTS_LIB)
 
 GENERATE += $(DB_INSERT_LIST_OUTPUT) $(MAPS_YCF_OUTPUT) $(UTILS_YCF_OUTPUT)
 
-## ASMJIT source files and headers. Note that ARM and x86 are both included,
-## unconditionally, since `core` sometimes references them.
+## ASMJIT source files and headers. Note that ARM, PPC and x86 are all
+## included, unconditionally, since `core` sometimes references them.
 ASMJIT_CPP = $(wildcard asmjit/core/*.cpp) \
 	$(wildcard asmjit/support/*.cpp) \
 	$(wildcard asmjit/$(JIT_ARCH)/*.cpp)
 ASMJIT_H = $(wildcard asmjit/*.h) \
 	$(wildcard asmjit/core/*.h) \
 	$(wildcard asmjit/arm/*.h) \
+	$(wildcard asmjit/ppc/*.h) \
 	$(wildcard asmjit/x86/*.h) \
 	$(wildcard asmjit/support/*.h)
 ASMJIT_TTF_H = $(foreach HEADER,$(ASMJIT_H),$(TTF_DIR)/$(HEADER))
