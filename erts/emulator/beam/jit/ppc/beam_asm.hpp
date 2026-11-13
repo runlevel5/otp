@@ -811,15 +811,27 @@ protected:
         a.embed_uint32(code);
     }
 
-    /* Loads the address of `label`, which must be within 32KB of this
-     * point. */
+    /* Loads the address of `label`.
+     *
+     * The first instruction provides the address of the one that follows it.
+     * When the label is bound we know how far away it is and can add the
+     * distance, whatever it is. Otherwise the second instruction adds its own
+     * distance to the label, which must then be bound within 32KB of it. */
     void emit_adr(ppc::Gp to, const Label &label) {
         ASSERT(to != LR_TMP);
 
-        /* The first instruction provides the address of the second one, and
-         * the latter adds its own distance to the label. */
         a.lnia(to);
-        a.addi(to, to, label);
+
+        if (code.is_label_bound(label)) {
+            Sint64 distance = (Sint64)code.label_offset_from_base(label) -
+                              (Sint64)a.offset();
+
+            if (distance != 0) {
+                add(to, to, distance);
+            }
+        } else {
+            a.addi(to, to, label);
+        }
     }
 
     /*
