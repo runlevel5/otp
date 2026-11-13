@@ -1148,7 +1148,8 @@ JIT_OBJS += \
 	$(OBJDIR)/instr_call.o \
 	$(OBJDIR)/instr_common.o \
 	$(OBJDIR)/instr_msg.o \
-	$(OBJDIR)/instr_nyi.o
+	$(OBJDIR)/instr_nyi.o \
+	$(OBJDIR)/instr_select.o
 else
 JIT_OBJS += \
 	$(OBJDIR)/instr_arith.o \

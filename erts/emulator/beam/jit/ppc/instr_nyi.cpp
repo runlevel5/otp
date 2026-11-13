@@ -872,14 +872,6 @@ void BeamModuleAssembler::emit_i_int_div(const ArgLabel &,
     emit_nyi("i_int_div");
 }
 
-void BeamModuleAssembler::emit_i_jump_on_val(const ArgSource &,
-                                             const ArgVal &,
-                                             const ArgWord &,
-                                             const ArgWord &,
-                                             const Span<const ArgVal> &) {
-    emit_nyi("i_jump_on_val");
-}
-
 void BeamModuleAssembler::emit_i_lambda_error(const ArgWord &) {
     emit_nyi("i_lambda_error");
 }
@@ -974,28 +966,6 @@ void BeamModuleAssembler::emit_i_rem_div(const ArgLabel &,
 
 void BeamModuleAssembler::emit_i_return_to_trace() {
     emit_nyi("i_return_to_trace");
-}
-
-void BeamModuleAssembler::emit_i_select_tuple_arity(
-        const ArgRegister &,
-        const ArgLabel &,
-        const ArgWord &,
-        const Span<const ArgVal> &) {
-    emit_nyi("i_select_tuple_arity");
-}
-
-void BeamModuleAssembler::emit_i_select_val_bins(const ArgSource &,
-                                                 const ArgVal &,
-                                                 const ArgWord &,
-                                                 const Span<const ArgVal> &) {
-    emit_nyi("i_select_val_bins");
-}
-
-void BeamModuleAssembler::emit_i_select_val_lins(const ArgSource &,
-                                                 const ArgVal &,
-                                                 const ArgWord &,
-                                                 const Span<const ArgVal> &) {
-    emit_nyi("i_select_val_lins");
 }
 
 void BeamModuleAssembler::emit_i_signed_width(const ArgLabel &,

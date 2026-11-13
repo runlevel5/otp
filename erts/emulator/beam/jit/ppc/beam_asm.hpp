@@ -1241,6 +1241,30 @@ protected:
 
     void ubif_comment(const ArgWord &Bif);
 
+    /* Returns a vector of the untagged and rebased `args`. The adjusted
+     * `comparand` is stored in ARG1. */
+    const std::vector<ArgVal> emit_select_untag(const ArgSource &Src,
+                                                const Span<const ArgVal> &args,
+                                                ppc::Gp comparand,
+                                                Label fail,
+                                                UWord base,
+                                                int shift);
+
+    void emit_linear_search(ppc::Gp val,
+                            Label fail,
+                            const Span<const ArgVal> &args);
+
+    void emit_binsearch_nodes(ppc::Gp reg,
+                              size_t Left,
+                              size_t Right,
+                              Label fail,
+                              const Span<const ArgVal> &args);
+
+    void emit_optimized_two_way_select(ppc::Gp reg,
+                                       const ArgVal &value1,
+                                       const ArgVal &value2,
+                                       const ArgVal &label);
+
     void emit_error(int code);
     void emit_error(int reason, const ArgSource &Src);
 
@@ -1569,6 +1593,19 @@ protected:
             mov_preserve_cache(r.reg, from);
         }
         flush_var(r);
+    }
+
+    /* Unsigned compare of `gp` and `arg`, with the result in `cr`. */
+    void cmpl_arg(ppc::Gp gp, const ArgVal &arg, ppc::Cr cr = ppc::cr0) {
+        if (arg.isImmed() || arg.isWord()) {
+            UWord val = arg.isImmed() ? arg.as<ArgImmed>().get()
+                                      : arg.as<ArgWord>().get();
+            cmpl(gp, val, cr);
+            return;
+        }
+
+        auto tmp = load_source(arg, SUPER_TMP);
+        a.cmpld(cr, gp, tmp.reg);
     }
 
     /* Branches to `Unequal` if Reg1 and Reg2 are definitely not equal based
