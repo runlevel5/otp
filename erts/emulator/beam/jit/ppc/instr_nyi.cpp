@@ -133,10 +133,6 @@ void BeamGlobalAssembler::emit_call_bif_shared() {
     emit_nyi("call_bif_shared");
 }
 
-void BeamGlobalAssembler::emit_call_light_bif_shared() {
-    emit_nyi("call_light_bif_shared");
-}
-
 void BeamGlobalAssembler::emit_call_nif_yield_helper() {
     emit_nyi("call_nif_yield_helper");
 }
@@ -257,14 +253,6 @@ void BeamGlobalAssembler::emit_i_bor_body_shared() {
     emit_nyi("i_bor_body_shared");
 }
 
-void BeamGlobalAssembler::emit_i_bif_body_shared() {
-    emit_nyi("i_bif_body_shared");
-}
-
-void BeamGlobalAssembler::emit_i_bif_guard_shared() {
-    emit_nyi("i_bif_guard_shared");
-}
-
 void BeamGlobalAssembler::emit_i_breakpoint_trampoline_shared() {
     emit_nyi("i_breakpoint_trampoline_shared");
 }
@@ -291,14 +279,6 @@ void BeamGlobalAssembler::emit_i_get_map_element_shared() {
 
 void BeamGlobalAssembler::emit_i_get_map_element_hash_shared() {
     emit_nyi("i_get_map_element_hash_shared");
-}
-
-void BeamGlobalAssembler::emit_i_length_guard_shared() {
-    emit_nyi("i_length_guard_shared");
-}
-
-void BeamGlobalAssembler::emit_i_length_body_shared() {
-    emit_nyi("i_length_body_shared");
 }
 
 void BeamGlobalAssembler::emit_i_line_breakpoint_trampoline_shared() {
@@ -589,11 +569,6 @@ void BeamModuleAssembler::emit_call_bif_mfa(const ArgAtom &,
     emit_nyi("call_bif_mfa");
 }
 
-void BeamModuleAssembler::emit_call_light_bif(const ArgWord &,
-                                              const ArgExport &) {
-    emit_nyi("call_light_bif");
-}
-
 void BeamModuleAssembler::emit_call_nif(const ArgWord &,
                                         const ArgWord &,
                                         const ArgWord &) {
@@ -651,30 +626,6 @@ void BeamModuleAssembler::emit_i_band(const ArgLabel &,
                                       const ArgSource &,
                                       const ArgRegister &) {
     emit_nyi("i_band");
-}
-
-void BeamModuleAssembler::emit_i_bif1(const ArgSource &,
-                                      const ArgLabel &,
-                                      const ArgWord &,
-                                      const ArgRegister &) {
-    emit_nyi("i_bif1");
-}
-
-void BeamModuleAssembler::emit_i_bif2(const ArgSource &,
-                                      const ArgSource &,
-                                      const ArgLabel &,
-                                      const ArgWord &,
-                                      const ArgRegister &) {
-    emit_nyi("i_bif2");
-}
-
-void BeamModuleAssembler::emit_i_bif3(const ArgSource &,
-                                      const ArgSource &,
-                                      const ArgSource &,
-                                      const ArgLabel &,
-                                      const ArgWord &,
-                                      const ArgRegister &) {
-    emit_nyi("i_bif3");
 }
 
 void BeamModuleAssembler::emit_i_bnot(const ArgLabel &,
@@ -1033,18 +984,6 @@ void BeamModuleAssembler::emit_i_lambda_trampoline(const ArgLambda &Lambda,
     emit_nyi("i_lambda_trampoline");
 }
 
-void BeamModuleAssembler::emit_i_length(const ArgLabel &,
-                                        const ArgWord &,
-                                        const ArgRegister &) {
-    emit_nyi("i_length");
-}
-
-void BeamModuleAssembler::emit_i_length_setup(const ArgLabel &,
-                                              const ArgWord &,
-                                              const ArgSource &) {
-    emit_nyi("i_length_setup");
-}
-
 void BeamModuleAssembler::emit_i_line_breakpoint_trampoline() {
     emit_nyi("i_line_breakpoint_trampoline");
 }
@@ -1389,23 +1328,6 @@ void BeamModuleAssembler::emit_new_map(const ArgRegister &,
     emit_nyi("new_map");
 }
 
-void BeamModuleAssembler::emit_nif_start() {
-    emit_nyi("nif_start");
-}
-
-void BeamModuleAssembler::emit_nofail_bif1(const ArgSource &,
-                                           const ArgWord &,
-                                           const ArgRegister &) {
-    emit_nyi("nofail_bif1");
-}
-
-void BeamModuleAssembler::emit_nofail_bif2(const ArgSource &,
-                                           const ArgSource &,
-                                           const ArgWord &,
-                                           const ArgRegister &) {
-    emit_nyi("nofail_bif2");
-}
-
 void BeamModuleAssembler::emit_raise(const ArgSource &, const ArgSource &) {
     emit_nyi("raise");
 }
@@ -1437,10 +1359,6 @@ void BeamModuleAssembler::emit_remove_message() {
 
 void BeamModuleAssembler::emit_return_trace() {
     emit_nyi("return_trace");
-}
-
-void BeamModuleAssembler::emit_send() {
-    emit_nyi("send");
 }
 
 void BeamModuleAssembler::emit_set_tuple_element(const ArgSource &,

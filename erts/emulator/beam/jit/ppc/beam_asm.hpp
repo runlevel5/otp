@@ -1223,6 +1223,12 @@ protected:
                                const ArgSource &Preserve,
                                ppc::Gp preserve_reg);
 
+    void emit_i_bif(const ArgLabel &Fail,
+                    const ArgWord &Bif,
+                    const ArgRegister &Dst);
+
+    void ubif_comment(const ArgWord &Bif);
+
     void emit_error(int code);
     void emit_error(int reason, const ArgSource &Src);
 
