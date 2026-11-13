@@ -288,14 +288,6 @@ void BeamGlobalAssembler::emit_int_div_rem_guard_shared() {
     emit_nyi("int_div_rem_guard_shared");
 }
 
-void BeamGlobalAssembler::emit_is_eq_exact_list_shared() {
-    emit_nyi("is_eq_exact_list_shared");
-}
-
-void BeamGlobalAssembler::emit_is_eq_exact_shallow_boxed_shared() {
-    emit_nyi("is_eq_exact_shallow_boxed_shared");
-}
-
 void BeamGlobalAssembler::emit_is_in_range_shared() {
     emit_nyi("is_in_range_shared");
 }
@@ -1061,12 +1053,6 @@ void BeamModuleAssembler::emit_is_eq(const ArgLabel &,
     emit_nyi("is_eq");
 }
 
-void BeamModuleAssembler::emit_is_eq_exact(const ArgLabel &,
-                                           const ArgSource &,
-                                           const ArgSource &) {
-    emit_nyi("is_eq_exact");
-}
-
 void BeamModuleAssembler::emit_is_ge(const ArgLabel &,
                                      const ArgSource &,
                                      const ArgSource &) {
@@ -1127,12 +1113,6 @@ void BeamModuleAssembler::emit_is_ne(const ArgLabel &,
                                      const ArgSource &,
                                      const ArgSource &) {
     emit_nyi("is_ne");
-}
-
-void BeamModuleAssembler::emit_is_ne_exact(const ArgLabel &,
-                                           const ArgSource &,
-                                           const ArgSource &) {
-    emit_nyi("is_ne_exact");
 }
 
 void BeamModuleAssembler::emit_is_record_accessible(const ArgLabel &,

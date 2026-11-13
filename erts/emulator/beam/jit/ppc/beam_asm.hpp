@@ -1571,6 +1571,49 @@ protected:
         flush_var(r);
     }
 
+    /* Branches to `Unequal` if Reg1 and Reg2 are definitely not equal based
+     * on their tags alone. (They may still be equal if both are
+     * immediates and all other bits are equal too.) */
+    void emit_is_unequal_based_on_tags(Label Unequal,
+                                       const ArgVal &Src1,
+                                       ppc::Gp Reg1,
+                                       const ArgVal &Src2,
+                                       ppc::Gp Reg2) {
+        ERTS_CT_ASSERT(TAG_PRIMARY_IMMED1 == _TAG_PRIMARY_MASK);
+        ERTS_CT_ASSERT((TAG_PRIMARY_LIST | TAG_PRIMARY_BOXED) ==
+                       TAG_PRIMARY_IMMED1);
+
+        if (always_one_of<BeamTypeId::AlwaysBoxed>(Src1)) {
+            emit_is_boxed(Unequal, Reg2);
+        } else if (always_one_of<BeamTypeId::AlwaysBoxed>(Src2)) {
+            emit_is_boxed(Unequal, Reg1);
+        } else if (exact_type<BeamTypeId::Cons>(Src1)) {
+            emit_is_cons(Unequal, Reg2);
+        } else if (exact_type<BeamTypeId::Cons>(Src2)) {
+            emit_is_cons(Unequal, Reg1);
+        } else {
+            a.or_(SUPER_TMP, Reg1, Reg2);
+
+            if (never_one_of<BeamTypeId::Cons>(Src1) ||
+                never_one_of<BeamTypeId::Cons>(Src2)) {
+                emit_is_boxed(Unequal, SUPER_TMP);
+            } else if (never_one_of<BeamTypeId::AlwaysBoxed>(Src1) ||
+                       never_one_of<BeamTypeId::AlwaysBoxed>(Src2)) {
+                emit_is_cons(Unequal, SUPER_TMP);
+            } else {
+                a.andi_rc(SUPER_TMP, SUPER_TMP, imm(_TAG_PRIMARY_MASK));
+                cmp(SUPER_TMP, TAG_PRIMARY_IMMED1);
+
+                /*
+                 * SUPER_TMP will now be TAG_PRIMARY_IMMED1 if either
+                 * one or both registers are immediates, or if one
+                 * register is a list and the other a boxed.
+                 */
+                a.beq(Unequal);
+            }
+        }
+    }
+
     /* Signed compare of `gp` and `arg`, with the result in `cr`. */
     void cmp_arg(ppc::Gp gp, const ArgVal &arg, ppc::Cr cr = ppc::cr0) {
         if (arg.isImmed() || arg.isWord()) {
