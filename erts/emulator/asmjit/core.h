@@ -2102,6 +2102,11 @@ namespace asmjit {
 //! \defgroup asmjit_a64 AArch64 Backend
 //! \brief AArch64 backend.
 
+
+//! \defgroup asmjit_ppc64 PPC64 Backend
+//! \brief PPC64 backend (under construction).
+
+
 //! \defgroup asmjit_ujit Universal JIT
 //! \brief Universal JIT abstracts X86, X86_64, and AArch64 code generation.
 //!

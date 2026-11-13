@@ -133,12 +133,23 @@ enum class OffsetType : uint8_t {
 //!               (ImmBitCount) +- ImmBitShift
 //! ```
 struct OffsetFormat {
+  //! \name Constants
+  //! \{
+
+  //! Encoding flags.
+  enum Flags : uint8_t {
+    //! The word that contains the offset is stored in big endian byte order (little endian is the default).
+    kFlagBigEndian = 0x01u
+  };
+
+  //! \}
+
   //! \name Members
   //! \{
 
   //! Type of the offset.
   OffsetType _type;
-  //! Encoding flags.
+  //! Encoding flags, see \ref Flags.
   uint8_t _flags;
   //! Size of the region (in bytes) containing the offset value, if the offset value is part of an instruction,
   //! otherwise it would be the same as `_value_size`.
@@ -179,6 +190,10 @@ struct OffsetFormat {
   //! Returns flags.
   [[nodiscard]]
   ASMJIT_INLINE_NODEBUG uint32_t flags() const noexcept { return _flags; }
+
+  //! Tests whether the word that contains the offset is stored in big endian byte order.
+  [[nodiscard]]
+  ASMJIT_INLINE_NODEBUG bool is_big_endian() const noexcept { return (_flags & kFlagBigEndian) != 0u; }
 
   //! Returns the size of the region/instruction where the offset is encoded.
   [[nodiscard]]
@@ -236,6 +251,13 @@ struct OffsetFormat {
     _imm_bit_count = uint8_t(imm_bit_count);
     _imm_bit_shift = uint8_t(imm_bit_shift);
     _imm_discard_lsb = uint8_t(imm_discard_lsb);
+  }
+
+  //! Sets whether the word that contains the offset is stored in big endian byte order.
+  //!
+  //! \note Both `reset_to_simple_value()` and `reset_to_imm_value()` reset the byte order to little endian.
+  inline void set_big_endian(bool value) noexcept {
+    _flags = uint8_t(value ? (_flags | kFlagBigEndian) : (_flags & ~uint32_t(kFlagBigEndian)));
   }
 
   inline void set_region(size_t region_size, size_t value_offset) noexcept {

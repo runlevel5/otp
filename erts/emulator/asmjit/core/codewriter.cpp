@@ -270,7 +270,12 @@ bool CodeWriterUtils::write_offset(void* dst, int64_t offset64, const OffsetForm
         return false;
       }
 
-      Support::storeu_u16_le(dst, uint16_t(Support::loadu_u16_le(dst) | mask));
+      if (format.is_big_endian()) {
+        Support::storeu_u16_be(dst, uint16_t(Support::loadu_u16_be(dst) | mask));
+      }
+      else {
+        Support::storeu_u16_le(dst, uint16_t(Support::loadu_u16_le(dst) | mask));
+      }
       return true;
     }
 
@@ -280,7 +285,12 @@ bool CodeWriterUtils::write_offset(void* dst, int64_t offset64, const OffsetForm
         return false;
       }
 
-      Support::storeu_u32_le(dst, Support::loadu_u32_le(dst) | mask);
+      if (format.is_big_endian()) {
+        Support::storeu_u32_be(dst, Support::loadu_u32_be(dst) | mask);
+      }
+      else {
+        Support::storeu_u32_le(dst, Support::loadu_u32_le(dst) | mask);
+      }
       return true;
     }
 
@@ -290,7 +300,12 @@ bool CodeWriterUtils::write_offset(void* dst, int64_t offset64, const OffsetForm
         return false;
       }
 
-      Support::storeu_u64_le(dst, Support::loadu_u64_le(dst) | mask);
+      if (format.is_big_endian()) {
+        Support::storeu_u64_be(dst, Support::loadu_u64_be(dst) | mask);
+      }
+      else {
+        Support::storeu_u64_le(dst, Support::loadu_u64_le(dst) | mask);
+      }
       return true;
     }
 
@@ -298,5 +313,58 @@ bool CodeWriterUtils::write_offset(void* dst, int64_t offset64, const OffsetForm
       return false;
   }
 }
+
+// CodeWriterUtils - Tests
+// =======================
+
+#if defined(ASMJIT_TEST)
+UNIT(code_writer_offset_byte_order) {
+  OffsetFormat format;
+
+  INFO("Checking a 24-bit offset shifted by 2 bits in a 32-bit word");
+  {
+    format.reset_to_imm_value(OffsetType::kSignedOffset, 4, 2, 24, 2);
+    EXPECT_FALSE(format.is_big_endian());
+
+    // The word is 0x48000001 and the offset -8 makes it 0x4BFFFFF9.
+    uint8_t le[4] = { 0x01, 0x00, 0x00, 0x48 };
+    EXPECT_TRUE(CodeWriterUtils::write_offset(le, -8, format));
+    EXPECT_EQ(Support::loadu_u32_le(le), 0x4BFFFFF9u);
+
+    format.set_big_endian(true);
+    EXPECT_TRUE(format.is_big_endian());
+
+    uint8_t be[4] = { 0x48, 0x00, 0x00, 0x01 };
+    EXPECT_TRUE(CodeWriterUtils::write_offset(be, -8, format));
+    EXPECT_EQ(Support::loadu_u32_be(be), 0x4BFFFFF9u);
+
+    format.set_big_endian(false);
+    EXPECT_FALSE(format.is_big_endian());
+  }
+
+  INFO("Checking 16-bit and 64-bit values");
+  {
+    uint8_t data[8] {};
+
+    format.reset_to_simple_value(OffsetType::kSignedOffset, 2);
+    format.set_big_endian(true);
+    EXPECT_TRUE(CodeWriterUtils::write_offset(data, 0x1234, format));
+    EXPECT_EQ(data[0], 0x12u);
+    EXPECT_EQ(data[1], 0x34u);
+
+    memset(data, 0, sizeof(data));
+    format.reset_to_simple_value(OffsetType::kSignedOffset, 8);
+    EXPECT_FALSE(format.is_big_endian());
+    EXPECT_TRUE(CodeWriterUtils::write_offset(data, 0x0102030405060708, format));
+    EXPECT_EQ(data[0], 0x08u);
+
+    memset(data, 0, sizeof(data));
+    format.set_big_endian(true);
+    EXPECT_TRUE(CodeWriterUtils::write_offset(data, 0x0102030405060708, format));
+    EXPECT_EQ(data[0], 0x01u);
+    EXPECT_EQ(data[7], 0x08u);
+  }
+}
+#endif
 
 ASMJIT_END_NAMESPACE

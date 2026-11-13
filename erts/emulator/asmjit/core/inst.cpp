@@ -15,6 +15,10 @@
   #include <asmjit/arm/a64instapi_p.h>
 #endif
 
+#if !defined(ASMJIT_NO_PPC64)
+  #include <asmjit/ppc/ppc64instapi_p.h>
+#endif
+
 ASMJIT_BEGIN_NAMESPACE
 
 // InstAPI - InstId <-> String
@@ -34,6 +38,12 @@ Error InstAPI::inst_id_to_string(Arch arch, InstId inst_id, InstStringifyOptions
   }
 #endif
 
+#if !defined(ASMJIT_NO_PPC64)
+  if (Environment::is_arch_ppc64(arch)) {
+    return ppc::InstInternal::inst_id_to_string(inst_id, options, output);
+  }
+#endif
+
   return make_error(Error::kInvalidArch);
 }
 
@@ -47,6 +57,12 @@ InstId InstAPI::string_to_inst_id(Arch arch, const char* s, size_t len) noexcept
 #if !defined(ASMJIT_NO_AARCH64)
   if (Environment::is_family_aarch64(arch)) {
     return a64::InstInternal::string_to_inst_id(s, len);
+  }
+#endif
+
+#if !defined(ASMJIT_NO_PPC64)
+  if (Environment::is_arch_ppc64(arch)) {
+    return ppc::InstInternal::string_to_inst_id(s, len);
   }
 #endif
 

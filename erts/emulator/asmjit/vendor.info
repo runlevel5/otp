@@ -10,16 +10,16 @@
     "ID": "erts-asmjit",
     "description": "Asmjit library",
     "copyrightText": "Copyright (c) 2008-2025 The AsmJit Authors",
-    "downloadLocation": "https://github.com/asmjit/asmjit",
+    "downloadLocation": "https://github.com/runlevel5/asmjit",
     "homepage": "https://github.com/asmjit/asmjit",
     "licenseDeclared": "Zlib",
     "name": "asmjit",
-    "versionInfo": "5fe1940275d04432da841896bac0a66cc2375551",
+    "versionInfo": "4f30964d81b5563c003326477cea17c81b5bb161",
     "path": "./erts/emulator/asmjit",
     "exclude": ["./erts/emulator/asmjit/vendor.info"],
     "supplier": "Person: Petr Kobalicek",
     "purl": "pkg:github/asmjit/asmjit",
-    "sha": "5fe1940275d04432da841896bac0a66cc2375551",
+    "sha": "4f30964d81b5563c003326477cea17c81b5bb161",
     "annotation": "Vendor package modified in Erlang/OTP"
   }
 ]

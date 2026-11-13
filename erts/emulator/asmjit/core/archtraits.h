@@ -52,13 +52,23 @@ enum class Arch : uint8_t {
   //! 32-bit ARM ISA in Thumb mode (big endian).
   kThumb_BE = 13,
 
+  //! 64-bit PowerPC ISA (big endian).
+  kPPC64_BE = 14,
+
   //! 32-bit MIPS ISA in (big endian).
   kMIPS32_BE = 15,
   //! 64-bit MIPS ISA in (big endian).
   kMIPS64_BE = 16,
 
+  //! 64-bit PowerPC ISA (little endian).
+  //!
+  //! \note All even values below \ref kBigEndian are taken, so this is the only little-endian architecture that
+  //! is above it. Use \ref Environment::is_little_endian() and \ref Environment::is_big_endian() instead of
+  //! comparing against \ref kBigEndian.
+  kPPC64_LE = 18,
+
   //! Maximum value of `Arch`.
-  kMaxValue = kMIPS64_BE,
+  kMaxValue = kPPC64_LE,
 
   //! Mask used by 32-bit ISAs (odd are 32-bit, even are 64-bit).
   k32BitMask = 0x01,
@@ -87,6 +97,9 @@ enum class Arch : uint8_t {
     ASMJIT_ARCH_MIPS == 32 && Support::ByteOrder::kNative == Support::ByteOrder::kBE ? kMIPS32_BE :
     ASMJIT_ARCH_MIPS == 64 && Support::ByteOrder::kNative == Support::ByteOrder::kLE ? kMIPS64_LE :
     ASMJIT_ARCH_MIPS == 64 && Support::ByteOrder::kNative == Support::ByteOrder::kBE ? kMIPS64_BE :
+
+    ASMJIT_ARCH_PPC == 64 && Support::ByteOrder::kNative == Support::ByteOrder::kLE ? kPPC64_LE :
+    ASMJIT_ARCH_PPC == 64 && Support::ByteOrder::kNative == Support::ByteOrder::kBE ? kPPC64_BE :
 
     kUnknown
 #endif

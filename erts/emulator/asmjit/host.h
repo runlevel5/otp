@@ -30,4 +30,15 @@ ASMJIT_END_NAMESPACE
 
 #endif
 
+// Detect 'PPC64' host architecture.
+#if ASMJIT_ARCH_PPC == 64 && !defined(ASMJIT_NO_PPC64)
+
+#include <asmjit/ppc64.h>
+
+ASMJIT_BEGIN_NAMESPACE
+namespace host { using namespace ppc; }
+ASMJIT_END_NAMESPACE
+
+#endif
+
 #endif // ASMJIT_HOST_H_INCLUDED

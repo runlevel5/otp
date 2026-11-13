@@ -93,6 +93,9 @@ enum class RegType : uint8_t {
   //! Tile register (X86_64: `TMM`).
   kTile = 17,
 
+  //! Condition register field (PPC64: `CR`).
+  kPPC_Cr = 18,
+
   //! Segment register (X86|X86_64: None, ES, CS, SS, DS, FS, GS).
   kSegment = 25,
   //! Control register (X86|X86_64: `CR`).
@@ -159,6 +162,9 @@ enum class RegGroup : uint8_t {
   kX86_St = 13,
   //! BND register group (X86|X86_64).
   kX86_Bnd = 14,
+
+  //! Condition register field group (CR) - maps to \ref RegGroup::kExtra (PPC64).
+  kPPC_Cr = kExtra,
 
   //! Program counter group (represents also EIP/RIP on X86|X86_64 targets).
   kPC = 15,
@@ -1205,6 +1211,7 @@ ASMJIT_DEFINE_REG_TRAITS(RegType::kDebug         , RegGroup::kDebug       , 0  ,
 ASMJIT_DEFINE_REG_TRAITS(RegType::kX86_Mm        , RegGroup::kX86_MM      , 8  , TypeId::kMmx64   ); // | x | x |   |   |
 ASMJIT_DEFINE_REG_TRAITS(RegType::kX86_St        , RegGroup::kX86_St      , 10 , TypeId::kFloat80 ); // | x | x |   |   |
 ASMJIT_DEFINE_REG_TRAITS(RegType::kX86_Bnd       , RegGroup::kX86_Bnd     , 16 , TypeId::kVoid    ); // | x | x |   |   |
+ASMJIT_DEFINE_REG_TRAITS(RegType::kPPC_Cr        , RegGroup::kPPC_Cr      , 0  , TypeId::kVoid    ); // |   |   |   |   | (PPC64)
 
 #undef ASMJIT_DEFINE_REG_TRAITS
 

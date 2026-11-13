@@ -28,6 +28,10 @@
     #include <sys/syscall.h>
     #include <sys/utsname.h>
 
+    #if ASMJIT_ARCH_PPC
+      #include <sys/auxv.h> // required by getauxval()
+    #endif
+
     #ifndef MAP_HUGETLB
       #define MAP_HUGETLB 0x40000
     #endif // MAP_HUGETLB
@@ -1150,10 +1154,51 @@ Error release_dual_mapping(DualMapping& dm, size_t size) noexcept {
 // Virtual Memory - Flush Instruction Cache
 // ========================================
 
+#if ASMJIT_ARCH_PPC && defined(__GNUC__)
+// PowerPC requires each modified cache block to be written to memory (dcbst) and then invalidated in the instruction
+// cache (icbi). GCC's `__builtin___clear_cache()` cannot be used as it generates no code when targeting PowerPC.
+static void flush_instruction_cache_ppc(void* p, size_t size) noexcept {
+  // Stepping by less than the real cache block size is always correct, so a small block size is used when the
+  // real one is not known.
+  constexpr size_t kMinCacheBlockSize = 16;
+
+  size_t dcache_block_size = kMinCacheBlockSize;
+  size_t icache_block_size = kMinCacheBlockSize;
+
+#if defined(__linux__)
+  size_t dcache_auxv = size_t(getauxval(AT_DCACHEBSIZE));
+  size_t icache_auxv = size_t(getauxval(AT_ICACHEBSIZE));
+
+  if (Support::is_power_of_2(dcache_auxv)) {
+    dcache_block_size = dcache_auxv;
+  }
+
+  if (Support::is_power_of_2(icache_auxv)) {
+    icache_block_size = icache_auxv;
+  }
+#endif
+
+  uintptr_t start = uintptr_t(p);
+  uintptr_t end = start + size;
+
+  for (uintptr_t addr = Support::align_down(start, dcache_block_size); addr < end; addr += dcache_block_size) {
+    __asm__ __volatile__("dcbst 0, %0" : : "r"(addr) : "memory");
+  }
+  __asm__ __volatile__("sync" : : : "memory");
+
+  for (uintptr_t addr = Support::align_down(start, icache_block_size); addr < end; addr += icache_block_size) {
+    __asm__ __volatile__("icbi 0, %0" : : "r"(addr) : "memory");
+  }
+  __asm__ __volatile__("isync" : : : "memory");
+}
+#endif
+
 void flush_instruction_cache(void* p, size_t size) noexcept {
 #if ASMJIT_ARCH_X86 || defined(__EMSCRIPTEN__)
   // X86|X86_64 architecture doesn't require to do anything to flush instruction cache.
   Support::maybe_unused(p, size);
+#elif ASMJIT_ARCH_PPC && defined(__GNUC__)
+  flush_instruction_cache_ppc(p, size);
 #elif defined(__APPLE__)
   sys_icache_invalidate(p, size);
 #elif defined(_WIN32)
@@ -1231,6 +1276,49 @@ ASMJIT_END_SUB_NAMESPACE
 #if defined(ASMJIT_TEST)
 ASMJIT_BEGIN_NAMESPACE
 
+#if ASMJIT_ARCH_PPC == 64 && defined(_CALL_ELF) && _CALL_ELF == 2
+// Rewrites a function in place many times and verifies that the code executed is always the code written last.
+// The function is larger than a cache block and starts at varying offsets, so more than one block must be flushed.
+static void test_virt_mem_flush_instruction_cache_ppc64() noexcept {
+  using Func = uint32_t (*)(void);
+
+  constexpr uint32_t kIterationCount = 20000;
+  constexpr uint32_t kFuncWordCount = 128;
+  constexpr size_t kAllocSize = 65536;
+
+  constexpr uint32_t kOpLiR3 = 0x38600000u;      // li r3, <imm>
+  constexpr uint32_t kOpAddiR3R3 = 0x38630000u;  // addi r3, r3, <imm>
+  constexpr uint32_t kOpNop = 0x60000000u;       // nop
+  constexpr uint32_t kOpBlr = 0x4E800020u;       // blr
+
+  void* ptr = nullptr;
+  if (VirtMem::alloc(&ptr, kAllocSize, VirtMem::MemoryFlags::kAccessRWX) != Error::kOk) {
+    INFO("  (skipped, RWX memory is not available)");
+    return;
+  }
+
+  for (uint32_t i = 0; i < kIterationCount; i++) {
+    uint32_t* code = static_cast<uint32_t*>(ptr) + (i % 61u);
+    uint32_t a = i & 0x3FFFu;
+    uint32_t b = (i * 7u) & 0x3FFFu;
+
+    code[0] = kOpLiR3 | a;
+    for (uint32_t j = 1; j < kFuncWordCount - 2u; j++) {
+      code[j] = kOpNop;
+    }
+    code[kFuncWordCount - 2u] = kOpAddiR3R3 | b;
+    code[kFuncWordCount - 1u] = kOpBlr;
+
+    VirtMem::flush_instruction_cache(code, kFuncWordCount * 4u);
+
+    Func func = reinterpret_cast<Func>(code);
+    EXPECT_EQ(func(), a + b);
+  }
+
+  EXPECT_EQ(VirtMem::release(ptr, kAllocSize), Error::kOk);
+}
+#endif
+
 UNIT(virt_mem) {
   VirtMem::Info vm_info = VirtMem::info();
 
@@ -1249,6 +1337,11 @@ UNIT(virt_mem) {
   INFO("    kEnabled: %s"    , Support::test(hardened_rt_flags, VirtMem::HardenedRuntimeFlags::kEnabled    ) ? "true" : "false");
   INFO("    kMapJit: %s"     , Support::test(hardened_rt_flags, VirtMem::HardenedRuntimeFlags::kMapJit     ) ? "true" : "false");
   INFO("    kDualMapping: %s", Support::test(hardened_rt_flags, VirtMem::HardenedRuntimeFlags::kDualMapping) ? "true" : "false");
+
+#if ASMJIT_ARCH_PPC == 64 && defined(_CALL_ELF) && _CALL_ELF == 2
+  INFO("VirtMem::flush_instruction_cache():");
+  test_virt_mem_flush_instruction_cache_ppc64();
+#endif
 }
 
 ASMJIT_END_NAMESPACE

@@ -388,6 +388,10 @@ public:
   [[nodiscard]]
   ASMJIT_INLINE_NODEBUG bool is_arch_riscv64() const noexcept { return _arch == Arch::kRISCV64; }
 
+  //! Tests whether this environment describes a 64-bit PowerPC.
+  [[nodiscard]]
+  ASMJIT_INLINE_NODEBUG bool is_arch_ppc64() const noexcept { return is_arch_ppc64(_arch); }
+
   //! Tests whether the architecture is 32-bit.
   [[nodiscard]]
   ASMJIT_INLINE_NODEBUG bool is_32bit() const noexcept { return is_32bit(_arch); }
@@ -528,13 +532,13 @@ public:
   //! Tests whether the given architecture `arch` is little endian.
   [[nodiscard]]
   static ASMJIT_INLINE_NODEBUG bool is_little_endian(Arch arch) noexcept {
-    return uint32_t(arch) < uint32_t(Arch::kBigEndian);
+    return !is_big_endian(arch);
   }
 
   //! Tests whether the given architecture `arch` is big endian.
   [[nodiscard]]
   static ASMJIT_INLINE_NODEBUG bool is_big_endian(Arch arch) noexcept {
-    return uint32_t(arch) >= uint32_t(Arch::kBigEndian);
+    return uint32_t(arch) >= uint32_t(Arch::kBigEndian) && arch != Arch::kPPC64_LE;
   }
 
   //! Tests whether the given architecture is Thumb or Thumb_BE.
@@ -565,6 +569,12 @@ public:
   [[nodiscard]]
   static ASMJIT_INLINE_NODEBUG bool is_arch_mips64(Arch arch) noexcept {
     return arch == Arch::kMIPS64_LE || arch == Arch::kMIPS64_BE;
+  }
+
+  //! Tests whether the given architecture is PPC64_LE or PPC64_BE.
+  [[nodiscard]]
+  static ASMJIT_INLINE_NODEBUG bool is_arch_ppc64(Arch arch) noexcept {
+    return arch == Arch::kPPC64_LE || arch == Arch::kPPC64_BE;
   }
 
   //! Tests whether the given architecture family is X86 or X64.

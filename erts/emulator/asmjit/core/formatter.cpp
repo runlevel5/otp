@@ -24,6 +24,10 @@
   #include <asmjit/arm/a64formatter_p.h>
 #endif
 
+#if !defined(ASMJIT_NO_PPC64)
+  #include <asmjit/ppc/ppc64formatter_p.h>
+#endif
+
 ASMJIT_BEGIN_NAMESPACE
 
 #if defined(ASMJIT_NO_COMPILER)
@@ -190,6 +194,12 @@ Error format_register(
   }
 #endif
 
+#if !defined(ASMJIT_NO_PPC64)
+  if (Environment::is_arch_ppc64(arch)) {
+    return ppc::FormatterInternal::format_register(sb, format_flags, emitter, arch, reg_type, reg_id);
+  }
+#endif
+
   return make_error(Error::kInvalidArch);
 }
 
@@ -209,6 +219,12 @@ Error format_operand(
 #if !defined(ASMJIT_NO_AARCH64)
   if (Environment::is_family_arm(arch)) {
     return arm::FormatterInternal::format_operand(sb, format_flags, emitter, arch, op);
+  }
+#endif
+
+#if !defined(ASMJIT_NO_PPC64)
+  if (Environment::is_arch_ppc64(arch)) {
+    return ppc::FormatterInternal::format_operand(sb, format_flags, emitter, arch, op);
   }
 #endif
 
@@ -315,6 +331,12 @@ Error format_instruction(
 #if !defined(ASMJIT_NO_AARCH64)
   if (Environment::is_family_aarch64(arch)) {
     return a64::FormatterInternal::format_instruction(sb, format_flags, emitter, arch, inst, operands);
+  }
+#endif
+
+#if !defined(ASMJIT_NO_PPC64)
+  if (Environment::is_arch_ppc64(arch)) {
+    return ppc::FormatterInternal::format_instruction(sb, format_flags, emitter, arch, inst, operands);
   }
 #endif
 
