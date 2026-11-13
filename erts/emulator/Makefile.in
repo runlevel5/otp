@@ -1140,6 +1140,11 @@ JIT_OBJS += \
 	$(OBJDIR)/instr_records.o \
 	$(OBJDIR)/instr_select.o \
 	$(OBJDIR)/instr_trace.o
+else ifeq ($(JIT_ARCH), ppc)
+## The PPC64 JIT is under construction. The instructions that have not been
+## implemented yet are stubs in `instr_nyi.cpp`.
+JIT_OBJS += \
+	$(OBJDIR)/instr_nyi.o
 else
 JIT_OBJS += \
 	$(OBJDIR)/instr_arith.o \
