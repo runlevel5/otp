@@ -130,6 +130,9 @@ void beamasm_flush_icache(const void *address, size_t size);
 #    elif defined(__aarch64__)
 #        define BEAM_ASM_FUNC_PROLOGUE_SIZE 12
 #        define BEAM_ASM_BP_RETURN_OFFSET 12
+#    elif defined(__powerpc64__)
+#        define BEAM_ASM_FUNC_PROLOGUE_SIZE 16
+#        define BEAM_ASM_BP_RETURN_OFFSET 16
 #    else
 #        define BEAM_ASM_FUNC_PROLOGUE_SIZE 8
 #        define BEAM_ASM_BP_RETURN_OFFSET 8
@@ -173,7 +176,7 @@ void beamasm_flush_icache(const void *address, size_t size);
  *   the code that sets breakpoints/loads NIFs doesn't rely on the trampoline
  *   being active until thread progress has been made.
  *
- * The solution for AArch64 is similar. */
+ * The solution for AArch64 and PPC64 is similar. */
 
 enum erts_asm_bp_flag {
     ERTS_ASM_BP_FLAG_NONE = 0,
@@ -228,6 +231,14 @@ static inline void erts_asm_bp_enable(ErtsCodePtr rw_p) {
 #    if defined(__aarch64__)
     /* B .next, .enabled: BL breakpoint_handler, .next: */
     erts_asm_bp_update_branch(rw_p, 2, 1);
+#    elif defined(__powerpc64__)
+    Uint32 volatile *rw_code = (Uint32 *)rw_p;
+
+    /* MFLR, STDU, B .next, .enabled: BL breakpoint_handler, .next: */
+    ASSERT(rw_code[2] == 0x48000008 && (rw_code[3] >> 26) == 18);
+
+    /* Reroute the branch instruction to `.enabled`. */
+    rw_code[2] = 0x48000004;
 #    else /* x86_64 */
     byte volatile *rw_code = (byte *)rw_p;
 
@@ -244,6 +255,14 @@ static inline void erts_asm_bp_disable(ErtsCodePtr rw_p) {
 #    if defined(__aarch64__)
     /* B .enabled, .enabled: BL breakpoint_handler, .next: */
     erts_asm_bp_update_branch(rw_p, 1, 2);
+#    elif defined(__powerpc64__)
+    Uint32 volatile *rw_code = (Uint32 *)rw_p;
+
+    /* MFLR, STDU, B .enabled, .enabled: BL breakpoint_handler, .next: */
+    ASSERT(rw_code[2] == 0x48000004 && (rw_code[3] >> 26) == 18);
+
+    /* Reroute the branch instruction back to `.next`. */
+    rw_code[2] = 0x48000008;
 #    else /* x86_64 */
     byte volatile *rw_code = (byte *)rw_p;
 

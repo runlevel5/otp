@@ -755,6 +755,24 @@ protected:
         }
     }
 
+    /* Emits a word that is not an instruction, which raises SIGILL should it
+     * ever be executed. `code` tells the places that use this apart. */
+    void udf(Uint16 code) {
+        /* Primary opcode 0 is not assigned to any instruction. */
+        a.embed_uint32(code);
+    }
+
+    /* Loads the address of `label`, which must be within 32KB of this
+     * point. */
+    void emit_adr(ppc::Gp to, const Label &label) {
+        ASSERT(to != LR_TMP);
+
+        /* The first instruction provides the address of the second one, and
+         * the latter adds its own distance to the label. */
+        a.lnia(to);
+        a.addi(to, to, label);
+    }
+
     /*
      * PPC has no LEA instruction. Implement our own to enable us
      * to use helpers based on getSchedulerRegRef() that return a
@@ -807,3 +825,405 @@ protected:
         }
     };
 };
+
+#include "beam_asm_global.hpp"
+
+class BeamModuleAssembler : public BeamAssembler,
+                            public BeamModuleAssemblerCommon {
+    BeamGlobalAssembler *ga;
+
+    /* Sequence number used to create unique named labels by
+     * resolve_label(). Only used when assembly output has been
+     * requested. */
+    long labelSeq = 0;
+
+    /* Save the last PC for an error. */
+    size_t last_error_offset = 0;
+
+    static constexpr ptrdiff_t STUB_CHECK_INTERVAL = 4 << 10;
+    static constexpr ptrdiff_t STUB_CHECK_INTERVAL_UNREACHABLE =
+            (4 << 10) - 128;
+    size_t last_stub_check_offset = 0;
+
+    /* Save the last known unreachable position. */
+    size_t last_unreachable_offset = 0;
+
+    /* Mark this point unreachable. This must be placed at the very end when
+     * used in a BEAM instruction, and should not be used in helper
+     * functions. */
+    void mark_unreachable() {
+        last_unreachable_offset = a.offset();
+    }
+
+    /* Use within BEAM instructions. */
+    void mark_unreachable_check_pending_stubs() {
+        mark_unreachable();
+        check_pending_stubs();
+    }
+
+    bool is_unreachable() {
+        return a.offset() == last_unreachable_offset;
+    }
+
+    enum Displacement : size_t {
+        /* Pessimistic estimate for helper functions, where we don't know the
+         * branch displacement or whether it will be used near label
+         * resolution.
+         *
+         * Note that we subtract the size of one instruction to handle
+         * backward displacements. */
+        dispUnknown = (32 << 10) - sizeof(Uint32) - STUB_CHECK_INTERVAL,
+
+        /* +- 32KB: conditional branches (`bc`), and everything that addresses
+         * a label relative to itself, such as loads of 8-byte literals. */
+        disp32K = (32 << 10) - sizeof(Uint32),
+
+        /* +- 32MB: `b`, `bl` */
+        disp32MB = (32 << 20) - sizeof(Uint32),
+
+        dispMin = dispUnknown,
+        dispMax = disp32MB
+    };
+
+    static_assert(dispMin <= dispUnknown && dispMax >= disp32MB);
+    static_assert(STUB_CHECK_INTERVAL < dispMin / 2);
+
+    struct Veneer {
+        ssize_t latestOffset;
+        Label anchor;
+
+        Label target;
+
+        constexpr bool operator>(const Veneer &other) const {
+            return latestOffset > other.latestOffset;
+        }
+    };
+
+    struct Constant {
+        ssize_t latestOffset;
+        Label anchor;
+
+        ArgVal value;
+
+        constexpr bool operator>(const Constant &other) const {
+            return latestOffset > other.latestOffset;
+        }
+    };
+
+    struct EmbeddedLabel {
+        ssize_t latestOffset;
+        Label anchor;
+
+        Label label;
+
+        constexpr bool operator>(const EmbeddedLabel &other) const {
+            return latestOffset > other.latestOffset;
+        }
+    };
+
+    /* ArgVal -> Constant
+     *
+     * `_pending_constants` points directly into this container, which is
+     * documented to be safe as long as we only insert elements. */
+    std::unordered_multimap<ArgVal, const Constant, ArgVal::Hash> _constants;
+
+    /* Label::id() -> Veneer
+     *
+     * `_pending_veneers` points directly into this container. */
+    std::unordered_multimap<uint32_t, const Veneer> _veneers;
+
+    template<typename T>
+    using PendingStubs =
+            std::priority_queue<std::reference_wrapper<const T>,
+                                std::deque<std::reference_wrapper<const T>>,
+                                std::greater<const T &>>;
+
+    /* Index of Label -> EmbeddedLabel
+     *
+     * `_pending_labels` points directly into this container. */
+    std::unordered_map<uint32_t, EmbeddedLabel> _embedded_labels;
+
+    /* All pending stubs, segregated by type and sorted by `latestOffset` in
+     * ascending order.
+     *
+     * We use separate queues to avoid interleaving them, as they have
+     * different sizes and alignment requirements. */
+    PendingStubs<Constant> _pending_constants;
+    PendingStubs<Veneer> _pending_veneers;
+    PendingStubs<EmbeddedLabel> _pending_labels;
+
+    /* Maps code pointers to thunks that jump to them, letting us treat global
+     * fragments as if they were local. */
+    std::unordered_map<void (*)(), Label> _dispatchTable;
+
+    /* Size of an entry in the dispatch table: four instructions followed by
+     * the address of the fragment. */
+    static constexpr size_t DISPATCH_THUNK_SIZE =
+            sizeof(Uint32[4]) + sizeof(UWord);
+
+    RegisterCache<16, ppc::Mem, ppc::Gp> reg_cache =
+            RegisterCache<16, ppc::Mem, ppc::Gp>(scheduler_registers, E, {});
+
+    void reg_cache_put(ppc::Mem mem, ppc::Gp src) {
+        if (src != SUPER_TMP) {
+            reg_cache.put(mem, src);
+        } else {
+            reg_cache.invalidate(mem);
+        }
+    }
+
+    ppc::Gp find_cache(ppc::Mem mem) {
+        return reg_cache.find(a.offset(), mem);
+    }
+
+    /* Works as the STD instruction, but also updates the cache. */
+    void std_cache(ppc::Gp src, ppc::Mem mem_dst) {
+        reg_cache.consolidate(a.offset());
+        reg_cache.invalidate(src);
+
+        a.std(src, mem_dst);
+
+        reg_cache_put(mem_dst, src);
+        reg_cache.update(a.offset());
+    }
+
+    /* Works like LD, but looks in the cache first. */
+    void ld_cached(ppc::Gp dst, ppc::Mem mem) {
+        ppc::Gp cached_reg = find_cache(mem);
+
+        if (cached_reg.is_valid()) {
+            /* This memory location is cached. */
+            if (cached_reg == dst) {
+                comment("skipped fetching of BEAM register");
+            } else {
+                comment("simplified fetching of BEAM register");
+                a.mr(dst, cached_reg);
+                reg_cache.invalidate(dst);
+                reg_cache.update(a.offset());
+            }
+        } else {
+            /* Not cached. Load and update cache. */
+            a.ld(dst, mem);
+            reg_cache.invalidate(dst);
+            reg_cache_put(mem, dst);
+            reg_cache.update(a.offset());
+        }
+    }
+
+    template<typename L, typename... Any>
+    void preserve_cache(L generate, Any... clobber) {
+        bool valid = reg_cache.validAt(a.offset());
+
+        generate();
+
+        if (valid) {
+            if (sizeof...(clobber) > 0) {
+                reg_cache.invalidate(clobber...);
+            }
+
+            reg_cache.update(a.offset());
+        }
+    }
+
+    void trim_preserve_cache(const ArgWord &Words) {
+        if (Words.get() > 0) {
+            ASSERT(Words.get() <= 1023);
+
+            preserve_cache([&]() {
+                auto offset = Words.get() * sizeof(Eterm);
+                add(E, E, offset);
+                reg_cache.trim_yregs(-offset);
+            });
+        }
+    }
+
+    void mov_preserve_cache(ppc::Gp dst, ppc::Gp src) {
+        preserve_cache(
+                [&]() {
+                    a.mr(dst, src);
+                },
+                dst);
+    }
+
+    void untag_ptr_preserve_cache(ppc::Gp dst, ppc::Gp src) {
+        preserve_cache(
+                [&]() {
+                    emit_untag_ptr(dst, src);
+                },
+                dst);
+    }
+
+    /* Embeds the address of `label` and returns a label for where it is
+     * stored.
+     *
+     * This must be used _IMMEDIATELY BEFORE_ the pair of instructions that
+     * loads the address, see `embed_constant` for details. */
+    Label embed_label(const Label &label, enum Displacement disp);
+
+public:
+    BeamModuleAssembler(BeamGlobalAssembler *ga,
+                        Eterm mod,
+                        int num_labels,
+                        const BeamFile *file = NULL);
+    BeamModuleAssembler(BeamGlobalAssembler *ga,
+                        Eterm mod,
+                        int num_labels,
+                        int num_functions,
+                        const BeamFile *file = NULL);
+
+    bool emit(unsigned op, const Span<const ArgVal> &args);
+
+    void emit_coverage(void *coverage, Uint index, Uint size);
+
+    void codegen(JitAllocator *allocator,
+                 const void **executable_ptr,
+                 void **writable_ptr,
+                 const BeamCodeHeader *in_hdr,
+                 const BeamCodeHeader **out_exec_hdr,
+                 BeamCodeHeader **out_rw_hdr);
+
+    void codegen(JitAllocator *allocator,
+                 const void **executable_ptr,
+                 void **writable_ptr);
+
+    void codegen(char *buff, size_t len);
+
+    AsmMetadata prepared_metadata;
+    bool metadata_prepared = false;
+    void prepare_metadata(const BeamCodeHeader *header);
+    void *register_metadata(const BeamCodeHeader *header);
+
+    ErtsCodePtr getCode(unsigned label);
+    ErtsCodePtr getLambda(unsigned index);
+
+    void *getCode(Label label) {
+        return BeamAssembler::getCode(label);
+    }
+
+    byte *getCode(char *labelName) {
+        return BeamAssembler::getCode(labelName);
+    }
+
+    void embed_vararg_rodata(const Span<const ArgVal> &args, ppc::Gp reg);
+
+    unsigned getCodeSize() {
+        ASSERT(code.has_base_address());
+        return code.code_size();
+    }
+
+    void copyCodeHeader(BeamCodeHeader *hdr);
+    BeamCodeHeader *getCodeHeader(void);
+    const ErtsCodeInfo *getOnLoad(void);
+
+    unsigned patchCatches(char *rw_base);
+    void patchLambda(char *rw_base, unsigned index, const ErlFunEntry *fe);
+    void patchLiteral(char *rw_base, unsigned index, Eterm lit);
+    void patchImport(char *rw_base, unsigned index, const Export *import);
+    void patchStrings(char *rw_base, const byte *string);
+
+protected:
+    void emit_nyi(const char *msg);
+    void emit_nyi(void);
+
+#include "beamasm_protos.h"
+
+    /* Resolves a BEAM label.
+     *
+     * When the branch type is not `dispUnknown`, this must be used
+     * _IMMEDIATELY BEFORE_ the instruction that the label is used in. */
+    const Label &resolve_beam_label(const ArgLabel &Label,
+                                    enum Displacement disp);
+    const Label &resolve_label(const Label &target,
+                               enum Displacement disp,
+                               const char *name = nullptr);
+
+    /* Resolves a shared fragment, creating a trampoline that loads the
+     * appropriate address before jumping there.
+     *
+     * When the branch type is not `dispUnknown`, this must be used
+     * _IMMEDIATELY BEFORE_ the instruction that the label is used in. */
+    const Label &resolve_fragment(void (*fragment)(), enum Displacement disp);
+
+    /* Embeds a constant argument and returns a label for where it is stored.
+     * All kinds of constants are accepted, including labels and export
+     * entries.
+     *
+     * The constant is addressed relative to the instruction that loads it,
+     * and that instruction needs the address of itself in a register. The
+     * label must therefore be used by an `lnia` instruction followed by a
+     * load, as `load_constant` does, and this must be used _IMMEDIATELY
+     * BEFORE_ that pair of instructions. */
+    Label embed_constant(const ArgVal &value, enum Displacement disp);
+
+    /* Convenience wrapper for embedding raw pointers or immediates. */
+    template<typename T,
+             std::enable_if_t<std::is_integral<T>::value ||
+                                      std::is_pointer<T>::value,
+                              bool> = true>
+    Label embed_constant(T data, enum Displacement disp) {
+        return embed_constant(ArgWord((UWord)data), disp);
+    }
+
+    /* Loads an embedded constant into `to`. */
+    void load_constant(ppc::Gp to, const ArgVal &value) {
+        ASSERT(to != LR_TMP);
+
+        Label anchor = embed_constant(value, disp32K);
+
+        a.lnia(to);
+        a.ld(to, to, anchor);
+    }
+
+    template<typename T,
+             std::enable_if_t<std::is_integral<T>::value ||
+                                      std::is_pointer<T>::value,
+                              bool> = true>
+    void load_constant(ppc::Gp to, T data) {
+        load_constant(to, ArgWord((UWord)data));
+    }
+
+    /* Binds a label and all related veneers that are within reach of it. */
+    void bind_veneer_target(const Label &target);
+
+    void emit_constant(const Constant &constant);
+    void emit_veneer(const Veneer &veneer);
+
+    /* Unconditionally emits all veneers and constants that are due within
+     * `range` bytes. */
+    void flush_pending_stubs(size_t range);
+
+    /* Emits pending veneers when appropriate. Must be called at least once
+     * every `STUB_CHECK_INTERVAL` bytes for veneers and constants to work. */
+    void check_pending_stubs();
+
+    /* Unconditionally emits all pending labels. Must only be called when
+     * the current code position is unreachable. */
+    void flush_pending_labels();
+
+    /* Move past the `last_error_offset` if necessary for the next instruction
+     * to be properly aligned (e.g. for line mappings). */
+    void flush_last_error();
+
+    /* Calls the given shared fragment, ensuring that the redzone is unused and
+     * that the return address forms a valid CP. */
+    template<typename Any>
+    void fragment_call(Any target) {
+        emit_assert_redzone_unused();
+
+        a.bl(resolve_fragment(reinterpret_cast<void (*)()>(target), disp32MB));
+    }
+
+    /* Calls a C function through the dispatch table, which loads the address
+     * of the function into SUPER_TMP as the callee expects. */
+    template<typename T, T Func>
+    void runtime_call() {
+        a.bl(resolve_fragment(reinterpret_cast<void (*)()>(Func), disp32MB));
+    }
+};
+
+void *beamasm_metadata_insert(std::string module_name,
+                              ErtsCodePtr base_address,
+                              size_t code_size,
+                              const AsmMetadata &metadata);
+void beamasm_metadata_early_init();
+void beamasm_metadata_late_init();
