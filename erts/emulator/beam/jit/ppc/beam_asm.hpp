@@ -641,6 +641,25 @@ protected:
         a.bne(lbl);
     }
 
+    /* Conditional branches that can reach as far as an unconditional one.
+     * Use them when the target may be more than 32KB away and there are no
+     * veneers to rely on, as in the shared fragments. */
+    void far_beq(Label target, ppc::Cr cr = ppc::cr0) {
+        Label next = a.new_label();
+
+        a.bne(cr, next);
+        a.b(target);
+        a.bind(next);
+    }
+
+    void far_bne(Label target, ppc::Cr cr = ppc::cr0) {
+        Label next = a.new_label();
+
+        a.beq(cr, next);
+        a.b(target);
+        a.bind(next);
+    }
+
     /* Set the EQ bit of CR0 if Reg1 and Reg2 are definitely not equal based
      * on their tags alone. (They may still be equal if both are
      * immediates and all other bits are equal too.) */
@@ -1122,6 +1141,13 @@ public:
     void patchStrings(char *rw_base, const byte *string);
 
 protected:
+    void emit_raise_exception();
+    void emit_raise_exception(const ErtsCodeMFA *exp);
+    void emit_raise_exception(Label I, const ErtsCodeMFA *exp);
+
+    void emit_proc_lc_unrequire(void);
+    void emit_proc_lc_require(void);
+
     void emit_nyi(const char *msg);
     void emit_nyi(void);
 
