@@ -233,14 +233,6 @@ void BeamGlobalAssembler::emit_i_func_info_shared() {
     emit_nyi("i_func_info_shared");
 }
 
-void BeamGlobalAssembler::emit_i_get_map_element_shared() {
-    emit_nyi("i_get_map_element_shared");
-}
-
-void BeamGlobalAssembler::emit_i_get_map_element_hash_shared() {
-    emit_nyi("i_get_map_element_hash_shared");
-}
-
 void BeamGlobalAssembler::emit_i_line_breakpoint_trampoline_shared() {
     emit_nyi("i_line_breakpoint_trampoline_shared");
 
@@ -300,10 +292,6 @@ void BeamGlobalAssembler::emit_mul_guard_shared() {
     emit_nyi("mul_guard_shared");
 }
 
-void BeamGlobalAssembler::emit_new_map_shared() {
-    emit_nyi("new_map_shared");
-}
-
 void BeamGlobalAssembler::emit_plus_body_shared() {
     emit_nyi("plus_body_shared");
 }
@@ -318,26 +306,6 @@ void BeamGlobalAssembler::emit_store_unaligned() {
 
 void BeamGlobalAssembler::emit_unary_minus_body_shared() {
     emit_nyi("unary_minus_body_shared");
-}
-
-void BeamGlobalAssembler::emit_update_map_assoc_shared() {
-    emit_nyi("update_map_assoc_shared");
-}
-
-void BeamGlobalAssembler::emit_update_map_single_assoc_shared() {
-    emit_nyi("update_map_single_assoc_shared");
-}
-
-void BeamGlobalAssembler::emit_update_map_exact_guard_shared() {
-    emit_nyi("update_map_exact_guard_shared");
-}
-
-void BeamGlobalAssembler::emit_update_map_exact_body_shared() {
-    emit_nyi("update_map_exact_body_shared");
-}
-
-void BeamGlobalAssembler::emit_update_map_single_exact_body_shared() {
-    emit_nyi("update_map_single_exact_body_shared");
 }
 
 /*
@@ -780,28 +748,6 @@ void BeamModuleAssembler::emit_i_get_local_record_elements(
     emit_nyi("i_get_local_record_elements");
 }
 
-void BeamModuleAssembler::emit_i_get_map_element(const ArgLabel &,
-                                                 const ArgRegister &,
-                                                 const ArgRegister &,
-                                                 const ArgRegister &) {
-    emit_nyi("i_get_map_element");
-}
-
-void BeamModuleAssembler::emit_i_get_map_element_hash(const ArgLabel &,
-                                                      const ArgRegister &,
-                                                      const ArgConstant &,
-                                                      const ArgWord &,
-                                                      const ArgRegister &) {
-    emit_nyi("i_get_map_element_hash");
-}
-
-void BeamModuleAssembler::emit_i_get_map_elements(const ArgLabel &,
-                                                  const ArgSource &,
-                                                  const ArgWord &,
-                                                  const Span<const ArgVal> &) {
-    emit_nyi("i_get_map_elements");
-}
-
 void BeamModuleAssembler::emit_i_get_record_elements(
         const ArgLabel &,
         const ArgRegister &,
@@ -849,14 +795,6 @@ void BeamModuleAssembler::emit_i_mul_add(const ArgLabel &,
                                          const ArgVal &,
                                          const ArgRegister &) {
     emit_nyi("i_mul_add");
-}
-
-void BeamModuleAssembler::emit_i_new_small_map_lit(const ArgRegister &,
-                                                   const ArgWord &,
-                                                   const ArgLiteral &,
-                                                   const ArgWord &,
-                                                   const Span<const ArgVal> &) {
-    emit_nyi("i_new_small_map_lit");
 }
 
 void BeamModuleAssembler::emit_i_perf_counter() {
@@ -1025,13 +963,6 @@ void BeamModuleAssembler::emit_mark_unreachable() {
     emit_nyi("mark_unreachable");
 }
 
-void BeamModuleAssembler::emit_new_map(const ArgRegister &,
-                                       const ArgWord &,
-                                       const ArgWord &,
-                                       const Span<const ArgVal> &) {
-    emit_nyi("new_map");
-}
-
 void BeamModuleAssembler::emit_raise(const ArgSource &, const ArgSource &) {
     emit_nyi("raise");
 }
@@ -1074,23 +1005,6 @@ void BeamModuleAssembler::emit_try_end_move_deallocate(const ArgSource &,
                                                        const ArgRegister &,
                                                        const ArgWord &) {
     emit_nyi("try_end_move_deallocate");
-}
-
-void BeamModuleAssembler::emit_update_map_assoc(const ArgSource &,
-                                                const ArgRegister &,
-                                                const ArgWord &,
-                                                const ArgWord &,
-                                                const Span<const ArgVal> &) {
-    emit_nyi("update_map_assoc");
-}
-
-void BeamModuleAssembler::emit_update_map_exact(const ArgSource &,
-                                                const ArgLabel &,
-                                                const ArgRegister &,
-                                                const ArgWord &,
-                                                const ArgWord &,
-                                                const Span<const ArgVal> &) {
-    emit_nyi("update_map_exact");
 }
 
 void BeamModuleAssembler::emit_update_record(const ArgAtom &,
