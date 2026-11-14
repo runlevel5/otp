@@ -1268,6 +1268,35 @@ protected:
     void emit_error(int code);
     void emit_error(int reason, const ArgSource &Src);
 
+    int emit_bs_get_field_size(const ArgSource &Size,
+                               int unit,
+                               Label Fail,
+                               const ppc::Gp &out);
+
+    void emit_bs_get_small(const Label &fail,
+                           const ArgRegister &Ctx,
+                           const ArgWord &Live,
+                           const ArgSource &Sz,
+                           Uint unit,
+                           Uint flags);
+
+    void emit_bs_get_any_int(const Label &fail,
+                             const ArgRegister &Ctx,
+                             const ArgWord &Live,
+                             const ArgSource &Sz,
+                             Uint unit,
+                             Uint flags);
+
+    void emit_bs_get_binary(const ArgWord heap_need,
+                            const ArgRegister &Ctx,
+                            const ArgLabel &Fail,
+                            const ArgWord &Live,
+                            const ArgSource &Size,
+                            const ArgWord &Unit,
+                            const ArgRegister &Dst);
+
+    void emit_bs_skip_bits(const ArgLabel &Fail, const ArgRegister &Ctx);
+
     void emit_validate(const ArgWord &Arity);
 
     ppc::Mem emit_variable_apply(bool includeI);

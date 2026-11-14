@@ -1145,6 +1145,7 @@ else ifeq ($(JIT_ARCH), ppc)
 ## implemented yet are stubs in `instr_nyi.cpp`.
 JIT_OBJS += \
 	$(OBJDIR)/instr_bif.o \
+	$(OBJDIR)/instr_bs.o \
 	$(OBJDIR)/instr_call.o \
 	$(OBJDIR)/instr_common.o \
 	$(OBJDIR)/instr_fun.o \

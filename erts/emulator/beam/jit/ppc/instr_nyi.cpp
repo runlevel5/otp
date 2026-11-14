@@ -86,10 +86,6 @@ void BeamGlobalAssembler::emit_bs_create_bin_error_shared() {
     emit_nyi("bs_create_bin_error_shared");
 }
 
-void BeamGlobalAssembler::emit_bs_get_tail_shared() {
-    emit_nyi("bs_get_tail_shared");
-}
-
 void BeamGlobalAssembler::emit_bs_get_utf8_shared() {
     emit_nyi("bs_get_utf8_shared");
 }
@@ -100,10 +96,6 @@ void BeamGlobalAssembler::emit_bs_get_utf8_short_shared() {
 
 void BeamGlobalAssembler::emit_bs_init_bits_shared() {
     emit_nyi("bs_init_bits_shared");
-}
-
-void BeamGlobalAssembler::emit_bs_size_check_shared() {
-    emit_nyi("bs_size_check_shared");
 }
 
 void BeamGlobalAssembler::emit_check_float_error() {
@@ -382,35 +374,8 @@ void BeamModuleAssembler::emit_bif_tuple_size(const ArgLabel &,
     emit_nyi("bif_tuple_size");
 }
 
-void BeamModuleAssembler::emit_bs_get_integer2(const ArgLabel &,
-                                               const ArgRegister &,
-                                               const ArgWord &,
-                                               const ArgSource &,
-                                               const ArgWord &,
-                                               const ArgWord &,
-                                               const ArgRegister &) {
-    emit_nyi("bs_get_integer2");
-}
-
-void BeamModuleAssembler::emit_bs_get_tail(const ArgRegister &,
-                                           const ArgRegister &,
-                                           const ArgWord &) {
-    emit_nyi("bs_get_tail");
-}
-
 void BeamModuleAssembler::emit_bs_init_writable() {
     emit_nyi("bs_init_writable");
-}
-
-void BeamModuleAssembler::emit_bs_set_position(const ArgRegister &,
-                                               const ArgRegister &) {
-    emit_nyi("bs_set_position");
-}
-
-void BeamModuleAssembler::emit_bs_test_tail2(const ArgLabel &,
-                                             const ArgRegister &,
-                                             const ArgWord &) {
-    emit_nyi("bs_test_tail2");
 }
 
 void BeamModuleAssembler::emit_fconv(const ArgSource &, const ArgFRegister &) {
@@ -465,47 +430,6 @@ void BeamModuleAssembler::emit_i_bs_create_bin(const ArgLabel &,
     emit_nyi("i_bs_create_bin");
 }
 
-void BeamModuleAssembler::emit_i_bs_get_bin_and_tail(const ArgRegister &,
-                                                     const ArgLabel &,
-                                                     const ArgWord &,
-                                                     const ArgRegister &,
-                                                     const ArgWord &,
-                                                     const ArgRegister &,
-                                                     const ArgRegister &) {
-    emit_nyi("i_bs_get_bin_and_tail");
-}
-
-void BeamModuleAssembler::emit_i_bs_get_binary2(const ArgRegister &,
-                                                const ArgLabel &,
-                                                const ArgWord &,
-                                                const ArgSource &,
-                                                const ArgWord &,
-                                                const ArgRegister &) {
-    emit_nyi("i_bs_get_binary2");
-}
-
-void BeamModuleAssembler::emit_i_bs_get_binary_all2(const ArgRegister &,
-                                                    const ArgLabel &,
-                                                    const ArgWord &,
-                                                    const ArgWord &,
-                                                    const ArgRegister &) {
-    emit_nyi("i_bs_get_binary_all2");
-}
-
-void BeamModuleAssembler::emit_i_bs_get_float2(const ArgRegister &,
-                                               const ArgLabel &,
-                                               const ArgWord &,
-                                               const ArgSource &,
-                                               const ArgWord &,
-                                               const ArgRegister &) {
-    emit_nyi("i_bs_get_float2");
-}
-
-void BeamModuleAssembler::emit_i_bs_get_position(const ArgRegister &,
-                                                 const ArgRegister &) {
-    emit_nyi("i_bs_get_position");
-}
-
 void BeamModuleAssembler::emit_i_bs_get_utf16(const ArgRegister &,
                                               const ArgLabel &,
                                               const ArgWord &,
@@ -525,13 +449,6 @@ void BeamModuleAssembler::emit_i_bs_match(const ArgLabel &,
     emit_nyi("i_bs_match");
 }
 
-void BeamModuleAssembler::emit_i_bs_match_string(const ArgRegister &,
-                                                 const ArgLabel &,
-                                                 const ArgWord &,
-                                                 const ArgBytePtr &) {
-    emit_nyi("i_bs_match_string");
-}
-
 void BeamModuleAssembler::emit_i_bs_match_test_heap(
         const ArgLabel &,
         const ArgRegister &,
@@ -539,13 +456,6 @@ void BeamModuleAssembler::emit_i_bs_match_test_heap(
         const ArgWord &,
         const Span<const ArgVal> &) {
     emit_nyi("i_bs_match_test_heap");
-}
-
-void BeamModuleAssembler::emit_i_bs_skip_bits2(const ArgRegister &,
-                                               const ArgSource &,
-                                               const ArgLabel &,
-                                               const ArgWord &) {
-    emit_nyi("i_bs_skip_bits2");
 }
 
 void BeamModuleAssembler::emit_i_bs_skip_utf16(const ArgRegister &,
@@ -557,13 +467,6 @@ void BeamModuleAssembler::emit_i_bs_skip_utf16(const ArgRegister &,
 void BeamModuleAssembler::emit_i_bs_skip_utf8(const ArgRegister &,
                                               const ArgLabel &) {
     emit_nyi("i_bs_skip_utf8");
-}
-
-void BeamModuleAssembler::emit_i_bs_start_match3(const ArgRegister &,
-                                                 const ArgWord &,
-                                                 const ArgLabel &,
-                                                 const ArgRegister &) {
-    emit_nyi("i_bs_start_match3");
 }
 
 void BeamModuleAssembler::emit_i_bs_validate_unicode_retract(
