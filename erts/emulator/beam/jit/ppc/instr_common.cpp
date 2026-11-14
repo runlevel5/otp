@@ -239,29 +239,38 @@ void BeamModuleAssembler::emit_get_list(const ArgRegister &Src,
         load_mem(tl.reg, getCDRRef(cons_ptr));
         flush_var(tl);
     } else {
-        preserve_cache([&]() {
+        preserve_cache(
+                [&]() {
 #if defined(TAG_LITERAL_PTR)
-            /* The pointer may carry the literal tag as well, so we get rid
-             * of all tag bits before using it. */
-            emit_untag_ptr(TMP1, src.reg);
-            a.ld(tl.reg, ppc::Mem(TMP1, sizeof(Eterm)));
-            a.ld(hd.reg, ppc::Mem(TMP1));
+                    /* The pointer may carry the literal tag as well, so we get
+                     * rid of all tag bits before using it. */
+                    emit_untag_ptr(TMP1, src.reg);
+                    a.ld(tl.reg, ppc::Mem(TMP1, sizeof(Eterm)));
+                    a.ld(hd.reg, ppc::Mem(TMP1));
 #else
-            /* The tail is likely to be the next address that is followed, so
-             * it is loaded straight from the tagged pointer with the
-             * displacement in an index register, which does not delay it.
-             * The head is loaded through an untagged copy of the pointer,
-             * which is as fast as anything when the value is not an
-             * address.
-             *
-             * Note that the tagged pointer is not used after the tail has
-             * been loaded, as the two may be in the same register. */
-            a.li(SUPER_TMP, imm(sizeof(Eterm) - TAG_PRIMARY_LIST));
-            a.addi(TMP1, src.reg, imm(-TAG_PRIMARY_LIST));
-            a.ldx(tl.reg, ppc::Mem(src.reg, SUPER_TMP));
-            a.ld(hd.reg, ppc::Mem(TMP1));
+                    /* The tail is likely to be the next address that is
+                     * followed, so it is loaded straight from the tagged
+                     * pointer with the displacement in an index register, which
+                     * does not delay it. The head is loaded through an untagged
+                     * copy of the pointer, which is as fast as anything when
+                     * the value is not an address.
+                     *
+                     * The source may be in the same register as the tail, in
+                     * which case the untagged copy must be made first, or in
+                     * TMP1, in which case it must be made last. */
+                    a.li(SUPER_TMP, imm(sizeof(Eterm) - TAG_PRIMARY_LIST));
+                    if (tl.reg == src.reg) {
+                        ASSERT(src.reg != TMP1);
+                        a.addi(TMP1, src.reg, imm(-TAG_PRIMARY_LIST));
+                        a.ldx(tl.reg, ppc::Mem(src.reg, SUPER_TMP));
+                    } else {
+                        a.ldx(tl.reg, ppc::Mem(src.reg, SUPER_TMP));
+                        a.addi(TMP1, src.reg, imm(-TAG_PRIMARY_LIST));
+                    }
+                    a.ld(hd.reg, ppc::Mem(TMP1));
 #endif
-        });
+                },
+                TMP1);
         flush_vars(hd, tl);
     }
 }
