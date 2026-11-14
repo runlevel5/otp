@@ -1636,6 +1636,264 @@ void BeamModuleAssembler::emit_is_ne_exact(const ArgLabel &Fail,
     a.bind(next);
 }
 
+void BeamModuleAssembler::emit_badmatch(const ArgSource &Src) {
+    emit_error(BADMATCH, Src);
+    mark_unreachable();
+}
+
+void BeamModuleAssembler::emit_case_end(const ArgSource &Src) {
+    emit_error(EXC_CASE_CLAUSE, Src);
+    mark_unreachable();
+}
+
+void BeamModuleAssembler::emit_system_limit_body() {
+    emit_error(SYSTEM_LIMIT);
+    mark_unreachable();
+}
+
+void BeamModuleAssembler::emit_if_end() {
+    emit_error(EXC_IF_CLAUSE);
+    mark_unreachable();
+}
+
+void BeamModuleAssembler::emit_badrecord(const ArgSource &Src) {
+    emit_error(EXC_BADRECORD, Src);
+    mark_unreachable();
+}
+
+void BeamModuleAssembler::emit_catch(const ArgYRegister &Y,
+                                     const ArgCatch &Handler) {
+    a.ld(TMP1, ppc::Mem(c_p, offsetof(Process, catches)));
+    a.addi(TMP1, TMP1, imm(1));
+    a.std(TMP1, ppc::Mem(c_p, offsetof(Process, catches)));
+
+    mov_arg(Y, Handler);
+}
+
+void BeamGlobalAssembler::emit_catch_end_shared() {
+    Label not_throw = a.new_label(), not_error = a.new_label(),
+          after_gc = a.new_label();
+
+    /* XREG0 = THE_NON_VALUE
+     * XREG1 = error reason/thrown value
+     * XREG2 = raw stacktrace.
+     * XREG3 = class
+     */
+
+    a.mr(XREG0, XREG1);
+    cmp(XREG3, am_throw);
+
+    a.bne(not_throw);
+
+    /* Return thrown value. */
+    a.blr();
+
+    a.bind(not_throw);
+    {
+        emit_enter_runtime_frame();
+
+        a.mr(ARG1, XREG0);
+
+        cmp(XREG3, am_error);
+        a.bne(not_error);
+
+        a.mr(ARG2, XREG0);
+        a.mr(ARG3, XREG2);
+
+        /* This is an error, attach a stacktrace to the reason. */
+        ERTS_CT_ASSERT(ERTS_HIGHEST_CALLEE_SAVE_XREG >= 2);
+        emit_enter_runtime<Update::eHeapAlloc>(2);
+
+        a.mr(ARG1, c_p);
+        runtime_call<Eterm (*)(Process *, Eterm, Eterm), add_stacktrace>();
+
+        emit_leave_runtime<Update::eHeapAlloc>(2);
+
+        /* Fall through! */
+    }
+
+    /* Error term from exit/1 or stack backtrace from error/{1,2,3} is
+     * now in ARG1. */
+    a.bind(not_error);
+    {
+        const int32_t bytes_needed = (3 + S_RESERVED) * sizeof(Eterm);
+        add(ARG3, HTOP, bytes_needed);
+        a.cmpld(ARG3, E);
+
+        a.ble(after_gc);
+        {
+            /* Preserve stacktrace / reason. */
+            a.mr(XREG0, ARG1);
+
+            mov_imm(ARG4, 1);
+            a.bl(labels[garbage_collect]);
+
+            a.mr(ARG1, XREG0);
+        }
+        a.bind(after_gc);
+
+        a.addi(XREG0, HTOP, imm(TAG_PRIMARY_BOXED));
+        mov_imm(TMP1, make_arityval(2));
+        mov_imm(TMP2, am_EXIT);
+        a.std(TMP1, ppc::Mem(HTOP));
+        a.std(TMP2, ppc::Mem(HTOP, sizeof(Eterm)));
+        a.std(ARG1, ppc::Mem(HTOP, sizeof(Eterm[2])));
+        a.addi(HTOP, HTOP, imm(sizeof(Eterm[3])));
+    }
+
+    emit_leave_runtime_frame();
+    a.blr();
+}
+
+void BeamModuleAssembler::emit_catch_end(const ArgYRegister &CatchTag) {
+    Label next = a.new_label();
+
+    /* XREG0 = THE_NON_VALUE
+     * XREG1 = class
+     * XREG2 = error reason/thrown value
+     * XREG3 = raw stacktrace. */
+
+    emit_try_end(CatchTag);
+    emit_branch_if_value(XREG0, next);
+    fragment_call(ga->get_catch_end_shared());
+    a.bind(next);
+}
+
+void BeamModuleAssembler::emit_try_end(const ArgYRegister &CatchTag) {
+    a.ld(TMP1, ppc::Mem(c_p, offsetof(Process, catches)));
+    a.addi(TMP1, TMP1, imm(-1));
+    a.std(TMP1, ppc::Mem(c_p, offsetof(Process, catches)));
+    mov_imm(TMP1, NIL);
+    a.std(TMP1, getArgRef(CatchTag));
+}
+
+void BeamModuleAssembler::emit_try_end_deallocate(const ArgWord &Deallocate) {
+    a.ld(TMP1, ppc::Mem(c_p, offsetof(Process, catches)));
+    a.addi(TMP1, TMP1, imm(-1));
+    a.std(TMP1, ppc::Mem(c_p, offsetof(Process, catches)));
+    if (Deallocate.get() > 0) {
+        add(E, E, Deallocate.get() * sizeof(Eterm));
+    }
+}
+
+void BeamModuleAssembler::emit_try_end_move_deallocate(
+        const ArgSource &Src,
+        const ArgRegister &Dst,
+        const ArgWord &Deallocate) {
+    a.ld(TMP1, ppc::Mem(c_p, offsetof(Process, catches)));
+    a.addi(TMP1, TMP1, imm(-1));
+    a.std(TMP1, ppc::Mem(c_p, offsetof(Process, catches)));
+    mov_arg(Dst, Src);
+    if (Deallocate.get() > 0) {
+        add(E, E, Deallocate.get() * sizeof(Eterm));
+    }
+}
+
+void BeamModuleAssembler::emit_try_case(const ArgYRegister &CatchTag) {
+    /* XREG0 = THE_NON_VALUE
+     * XREG1 = error reason/thrown value
+     * XREG2 = raw stacktrace.
+     * XREG3 = class */
+
+    a.ld(TMP1, ppc::Mem(c_p, offsetof(Process, catches)));
+    a.mr(XREG0, XREG3);
+    a.addi(TMP1, TMP1, imm(-1));
+    a.std(TMP1, ppc::Mem(c_p, offsetof(Process, catches)));
+
+    /* The try_tag in the Y slot in the stack frame has already been
+     * cleared. */
+
+#ifdef DEBUG
+    Label ok = a.new_label();
+    comment("Start of assertion code");
+    a.ld(TMP1, ppc::Mem(c_p, offsetof(Process, fvalue)));
+    a.ld(TMP2, ppc::Mem(c_p, offsetof(Process, ftrace)));
+    cmp(TMP1, NIL);
+    cmp(TMP2, NIL, ppc::cr1);
+    a.crand(ppc::cr0.eq(), ppc::cr0.eq(), ppc::cr1.eq());
+    a.beq(ok);
+
+    comment("Assertion c_p->fvalue == NIL && c_p->ftrace == NIL failed");
+    udf(0x42);
+
+    a.bind(ok);
+#endif
+}
+
+void BeamModuleAssembler::emit_try_case_end(const ArgSource &Src) {
+    emit_error(EXC_TRY_CLAUSE, Src);
+}
+
+void BeamGlobalAssembler::emit_raise_shared() {
+    a.std(ARG1, ppc::Mem(c_p, offsetof(Process, fvalue)));
+    a.std(ARG2, ppc::Mem(c_p, offsetof(Process, ftrace)));
+
+    /* The call below overwrites the link register, so the address of the
+     * instruction that raised the exception is kept in a register that C
+     * code preserves. */
+    a.mflr(TMP2);
+
+    emit_enter_runtime(0);
+
+    a.mr(ARG1, c_p);
+    runtime_call<void (*)(Process *, Eterm), erts_sanitize_freason>();
+
+    emit_leave_runtime(0);
+
+    mov_imm(ARG4, 0);
+    a.mr(ARG2, TMP2);
+    a.b(labels[raise_exception_shared]);
+}
+
+void BeamModuleAssembler::emit_raise(const ArgSource &Trace,
+                                     const ArgSource &Value) {
+    mov_arg(ARG1, Value);
+    mov_arg(ARG2, Trace);
+    fragment_call(ga->get_raise_shared());
+
+    mark_unreachable();
+
+    /* `line` instructions need to know the latest offset that may throw an
+     * exception. See the `line` instruction for details. */
+    last_error_offset = a.offset();
+}
+
+void BeamModuleAssembler::emit_build_stacktrace() {
+    a.mr(ARG2, XREG0);
+
+    emit_enter_runtime<Update::eHeapAlloc>(0);
+
+    a.mr(ARG1, c_p);
+    runtime_call<Eterm (*)(Process *, Eterm), build_stacktrace>();
+
+    emit_leave_runtime<Update::eHeapAlloc>(0);
+
+    a.mr(XREG0, ARG1);
+}
+
+/* This instruction has the same semantics as the erlang:raise/3 BIF,
+ * except that it can rethrow a raw stack backtrace. */
+void BeamModuleAssembler::emit_raw_raise() {
+    Label next = a.new_label();
+
+    a.mr(ARG1, XREG2);
+    a.mr(ARG2, XREG0);
+    a.mr(ARG3, XREG1);
+    a.mr(ARG4, c_p);
+
+    emit_enter_runtime(0);
+    runtime_call<int (*)(Eterm, Eterm, Eterm, Process *), raw_raise>();
+    emit_leave_runtime(0);
+
+    a.cmpwi(ARG1, imm(0));
+    a.bne(next);
+
+    emit_raise_exception();
+
+    a.bind(next);
+    mov_imm(XREG0, am_badarg);
+}
+
 /* The reduction test of a function consists of the two instructions that
  * load the address of the function, the store that only exists when
  * allocation tags are enabled, the decrement, and the branch. */
@@ -1683,4 +1941,100 @@ void BeamModuleAssembler::emit_i_test_yield() {
 void BeamModuleAssembler::emit_i_yield() {
     mov_imm(XREG0, am_true);
     fragment_call(ga->get_dispatch_return());
+}
+
+void BeamModuleAssembler::emit_i_perf_counter() {
+    Label next = a.new_label(), small = a.new_label();
+
+    /* Call the function pointer used by erts_sys_perf_counter */
+#ifdef WIN32
+    mov_imm(TMP1, erts_sys_time_data__.r.o.sys_hrtime);
+#else
+    mov_imm(TMP1, erts_sys_time_data__.r.o.perf_counter);
+#endif
+    dynamic_runtime_call<0>(TMP1);
+
+    a.sradi(TMP1, ARG1, imm(SMALL_BITS - 1));
+    a.addi(TMP1, TMP1, imm(1));
+    a.cmpldi(TMP1, imm(1));
+    a.ble(small);
+
+    {
+        a.mr(XREG0, ARG1);
+
+        emit_gc_test(ArgWord(0),
+                     ArgWord(ERTS_MAX_UINT64_HEAP_SIZE),
+                     ArgWord(0));
+
+        mov_imm(TMP1, make_pos_bignum_header(1));
+        a.std(TMP1, ppc::Mem(HTOP));
+        a.std(XREG0, ppc::Mem(HTOP, sizeof(Eterm)));
+        a.addi(HTOP, HTOP, imm(sizeof(Eterm[2])));
+        a.addi(XREG0, HTOP, imm(-(Sint)(sizeof(Eterm[2]) - TAG_PRIMARY_BOXED)));
+        a.b(next);
+    }
+
+    a.bind(small);
+    {
+        a.sldi(ARG1, ARG1, _TAG_IMMED1_SIZE);
+        a.ori(XREG0, ARG1, imm(_TAG_IMMED1_SMALL));
+    }
+
+    a.bind(next);
+}
+
+void BeamModuleAssembler::emit_mark_unreachable() {
+    mark_unreachable();
+}
+
+void BeamModuleAssembler::emit_coverage(void *coverage, Uint index, Uint size) {
+    Uint address = Uint(coverage) + index * size;
+    comment("coverage index = %d", index);
+
+    mov_imm(TMP1, address);
+    if (size == sizeof(Uint)) {
+        Label again = a.new_label();
+
+        /* The instructions that load and reserve, and store conditionally,
+         * only exist in an indexed form. */
+        a.li(LR_TMP, imm(0));
+
+        a.bind(again);
+        {
+            a.ldarx(TMP2, ppc::Mem(TMP1, LR_TMP));
+            a.addi(TMP2, TMP2, imm(1));
+            a.stdcx_rc(TMP2, ppc::Mem(TMP1, LR_TMP));
+            a.bne(again);
+        }
+    } else if (size == sizeof(byte)) {
+        if ((address & 0xff) != 0) {
+            a.stb(TMP1, ppc::Mem(TMP1));
+        } else {
+            mov_imm(TMP2, 1);
+            a.stb(TMP2, ppc::Mem(TMP1));
+        }
+    } else {
+        ASSERT(0);
+    }
+}
+
+void BeamModuleAssembler::emit_i_debug_line(const ArgWord &Loc,
+                                            const ArgWord &Index,
+                                            const ArgWord &Live) {
+    emit_validate(Live);
+
+    /*
+     * We store live in TMP1, which will be used in case the line-breakpoint
+     * is enabled in the trampoline that follows. Doing it here keeps the.
+     * trampoline logic simpler
+     */
+    ASSERT(Live.get() <= MAX_ARG);
+    mov_imm(TMP1, Live.get());
+
+    /* The trampoline code for a line-breakpoint needs to be aligned to
+     * a word, so that changing the code at runtime to enable the breakpoint
+     * happens atomically. Notice this is emitted before the current offset
+     * is added to the line-table.
+     */
+    a.align(AlignMode::kCode, 8);
 }

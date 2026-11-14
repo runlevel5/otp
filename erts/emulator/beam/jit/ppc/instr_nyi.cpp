@@ -49,14 +49,6 @@ enum erts_is_line_breakpoint BeamGlobalAssembler::is_line_breakpoint_trampoline(
     return IS_NOT_LINE_BP;
 }
 
-void BeamModuleAssembler::emit_coverage(void *coverage, Uint index, Uint size) {
-    (void)coverage;
-    (void)index;
-    (void)size;
-
-    emit_nyi("coverage");
-}
-
 /*
  * Shared fragments.
  */
@@ -119,10 +111,6 @@ void BeamGlobalAssembler::emit_bs_init_bits_shared() {
 
 void BeamGlobalAssembler::emit_bs_size_check_shared() {
     emit_nyi("bs_size_check_shared");
-}
-
-void BeamGlobalAssembler::emit_catch_end_shared() {
-    emit_nyi("catch_end_shared");
 }
 
 void BeamGlobalAssembler::emit_check_float_error() {
@@ -296,10 +284,6 @@ void BeamGlobalAssembler::emit_plus_body_shared() {
     emit_nyi("plus_body_shared");
 }
 
-void BeamGlobalAssembler::emit_raise_shared() {
-    emit_nyi("raise_shared");
-}
-
 void BeamGlobalAssembler::emit_store_unaligned() {
     emit_nyi("store_unaligned");
 }
@@ -311,14 +295,6 @@ void BeamGlobalAssembler::emit_unary_minus_body_shared() {
 /*
  * Instructions.
  */
-
-void BeamModuleAssembler::emit_badmatch(const ArgSource &) {
-    emit_nyi("badmatch");
-}
-
-void BeamModuleAssembler::emit_badrecord(const ArgSource &) {
-    emit_nyi("badrecord");
-}
 
 void BeamModuleAssembler::emit_bif_and(const ArgLabel &,
                                        const ArgSource &,
@@ -465,22 +441,6 @@ void BeamModuleAssembler::emit_bs_test_tail2(const ArgLabel &,
                                              const ArgRegister &,
                                              const ArgWord &) {
     emit_nyi("bs_test_tail2");
-}
-
-void BeamModuleAssembler::emit_build_stacktrace() {
-    emit_nyi("build_stacktrace");
-}
-
-void BeamModuleAssembler::emit_case_end(const ArgSource &) {
-    emit_nyi("case_end");
-}
-
-void BeamModuleAssembler::emit_catch(const ArgYRegister &, const ArgCatch &) {
-    emit_nyi("catch");
-}
-
-void BeamModuleAssembler::emit_catch_end(const ArgYRegister &) {
-    emit_nyi("catch_end");
 }
 
 void BeamModuleAssembler::emit_fconv(const ArgSource &, const ArgFRegister &) {
@@ -696,12 +656,6 @@ void BeamModuleAssembler::emit_i_ctz(const ArgLabel &,
     emit_nyi("i_ctz");
 }
 
-void BeamModuleAssembler::emit_i_debug_line(const ArgWord &,
-                                            const ArgWord &,
-                                            const ArgWord &) {
-    emit_nyi("i_debug_line");
-}
-
 void BeamModuleAssembler::emit_i_div_rem(const ArgLabel &,
                                          const ArgWord &,
                                          const ArgSource &,
@@ -797,10 +751,6 @@ void BeamModuleAssembler::emit_i_mul_add(const ArgLabel &,
     emit_nyi("i_mul_add");
 }
 
-void BeamModuleAssembler::emit_i_perf_counter() {
-    emit_nyi("i_perf_counter");
-}
-
 void BeamModuleAssembler::emit_i_plus(const ArgLabel &,
                                       const ArgWord &,
                                       const ArgSource &,
@@ -874,10 +824,6 @@ void BeamModuleAssembler::emit_i_update_native_record(
         const ArgWord &,
         const Span<const ArgVal> &) {
     emit_nyi("i_update_native_record");
-}
-
-void BeamModuleAssembler::emit_if_end() {
-    emit_nyi("if_end");
 }
 
 void BeamModuleAssembler::emit_is_any_native_record(const ArgLabel &,
@@ -959,18 +905,6 @@ void BeamModuleAssembler::emit_is_record_accessible(const ArgLabel &,
     emit_nyi("is_record_accessible");
 }
 
-void BeamModuleAssembler::emit_mark_unreachable() {
-    emit_nyi("mark_unreachable");
-}
-
-void BeamModuleAssembler::emit_raise(const ArgSource &, const ArgSource &) {
-    emit_nyi("raise");
-}
-
-void BeamModuleAssembler::emit_raw_raise() {
-    emit_nyi("raw_raise");
-}
-
 void BeamModuleAssembler::emit_return_trace() {
     emit_nyi("return_trace");
 }
@@ -979,32 +913,6 @@ void BeamModuleAssembler::emit_set_tuple_element(const ArgSource &,
                                                  const ArgRegister &,
                                                  const ArgWord &) {
     emit_nyi("set_tuple_element");
-}
-
-void BeamModuleAssembler::emit_system_limit_body() {
-    emit_nyi("system_limit_body");
-}
-
-void BeamModuleAssembler::emit_try_case(const ArgYRegister &) {
-    emit_nyi("try_case");
-}
-
-void BeamModuleAssembler::emit_try_case_end(const ArgSource &) {
-    emit_nyi("try_case_end");
-}
-
-void BeamModuleAssembler::emit_try_end(const ArgYRegister &) {
-    emit_nyi("try_end");
-}
-
-void BeamModuleAssembler::emit_try_end_deallocate(const ArgWord &) {
-    emit_nyi("try_end_deallocate");
-}
-
-void BeamModuleAssembler::emit_try_end_move_deallocate(const ArgSource &,
-                                                       const ArgRegister &,
-                                                       const ArgWord &) {
-    emit_nyi("try_end_move_deallocate");
 }
 
 void BeamModuleAssembler::emit_update_record(const ArgAtom &,
