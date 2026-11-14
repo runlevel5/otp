@@ -209,8 +209,6 @@ $decl_emit_funcs
     void emit_bif_element_helper(Label fail);
     void emit_bif_tuple_size_helper(Label fail);
 
-    void emit_nyi(const char *msg);
-
     void emit_internal_hash_helper();
     void emit_flatmap_get_element();
     void emit_hashmap_get_element();

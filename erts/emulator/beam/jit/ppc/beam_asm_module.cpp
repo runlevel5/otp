@@ -483,6 +483,22 @@ bool BeamModuleAssembler::emit(unsigned specific_op,
  * Here follows meta instructions.
  */
 
+void BeamGlobalAssembler::emit_i_func_info_shared() {
+    /* The link register now points 4 bytes into the ErtsCodeInfo struct for
+     * the function. Put the address of the MFA into ARG1. */
+    a.mflr(ARG1);
+    a.addi(ARG1, ARG1, imm(offsetof(ErtsCodeInfo, mfa) - 4));
+
+    mov_imm(TMP1, EXC_FUNCTION_CLAUSE);
+    a.std(TMP1, ppc::Mem(c_p, offsetof(Process, freason)));
+    a.std(ARG1, ppc::Mem(c_p, offsetof(Process, current)));
+
+    mov_imm(ARG2, 0);
+    mov_imm(ARG4, 0);
+
+    a.b(labels[raise_exception_shared]);
+}
+
 void BeamModuleAssembler::emit_i_func_info(const ArgWord &Label,
                                            const ArgAtom &Module,
                                            const ArgAtom &Function,
