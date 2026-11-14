@@ -86,28 +86,12 @@ void BeamGlobalAssembler::emit_i_func_info_shared() {
     emit_nyi("i_func_info_shared");
 }
 
-void BeamGlobalAssembler::emit_int128_to_big_shared() {
-    emit_nyi("int128_to_big_shared");
-}
-
 void BeamGlobalAssembler::emit_int_div_rem_body_shared() {
     emit_nyi("int_div_rem_body_shared");
 }
 
 void BeamGlobalAssembler::emit_int_div_rem_guard_shared() {
     emit_nyi("int_div_rem_guard_shared");
-}
-
-void BeamGlobalAssembler::emit_mul_add_body_shared() {
-    emit_nyi("mul_add_body_shared");
-}
-
-void BeamGlobalAssembler::emit_mul_add_guard_shared() {
-    emit_nyi("mul_add_guard_shared");
-}
-
-void BeamGlobalAssembler::emit_mul_guard_shared() {
-    emit_nyi("mul_guard_shared");
 }
 
 void BeamGlobalAssembler::emit_store_unaligned() {
@@ -269,15 +253,6 @@ void BeamModuleAssembler::emit_i_m_div(const ArgLabel &,
                                        const ArgSource &,
                                        const ArgRegister &) {
     emit_nyi("i_m_div");
-}
-
-void BeamModuleAssembler::emit_i_mul_add(const ArgLabel &,
-                                         const ArgSource &,
-                                         const ArgSource &,
-                                         const ArgSource &,
-                                         const ArgVal &,
-                                         const ArgRegister &) {
-    emit_nyi("i_mul_add");
 }
 
 void BeamModuleAssembler::emit_i_rem(const ArgLabel &,
