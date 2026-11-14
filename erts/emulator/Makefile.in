@@ -1144,6 +1144,7 @@ else ifeq ($(JIT_ARCH), ppc)
 ## The PPC64 JIT is under construction. The instructions that have not been
 ## implemented yet are stubs in `instr_nyi.cpp`.
 JIT_OBJS += \
+	$(OBJDIR)/instr_arith.o \
 	$(OBJDIR)/instr_bif.o \
 	$(OBJDIR)/instr_bs.o \
 	$(OBJDIR)/instr_call.o \

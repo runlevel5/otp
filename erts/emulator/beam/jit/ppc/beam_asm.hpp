@@ -1297,6 +1297,12 @@ protected:
 
     void emit_bs_skip_bits(const ArgLabel &Fail, const ArgRegister &Ctx);
 
+    void emit_are_both_small(const ArgSource &LHS,
+                             const ppc::Gp lhs_reg,
+                             const ArgSource &RHS,
+                             const ppc::Gp rhs_reg,
+                             const Label next);
+
     void emit_copy_words(ppc::Gp from,
                          ssize_t from_offset,
                          ppc::Gp to,
