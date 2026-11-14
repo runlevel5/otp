@@ -1379,6 +1379,11 @@ protected:
                         const ppc::Gp bin_offset,
                         const ppc::Gp bitdata);
 
+    void emit_bs_get_utf8(const ArgRegister &Ctx, const ArgLabel &Fail);
+    void emit_bs_get_utf16(const ArgRegister &Ctx,
+                           const ArgLabel &Fail,
+                           const ArgWord &Flags);
+    void emit_validate_unicode(Label next, Label fail, ppc::Gp value);
     void update_bin_state(ppc::Gp bin_offset,
                           Sint bit_offset,
                           Sint size,

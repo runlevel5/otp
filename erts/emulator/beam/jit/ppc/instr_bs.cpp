@@ -615,6 +615,391 @@ void BeamModuleAssembler::emit_i_bs_get_float2(const ArgRegister &Ctx,
     }
 }
 
+/*
+ * ARG1 = pointer to match state
+ * ARG2 = number of bits left in binary (< 32)
+ * ARG3 = position in binary in bits
+ * ARG4 = base pointer to binary data
+ *
+ * See the comment for emit_bs_get_utf8_shared() for details about the
+ * return value.
+ */
+void BeamGlobalAssembler::emit_bs_get_utf8_short_shared() {
+    const int start_offset = offsetof(ErlSubBits, start);
+
+    const ppc::Gp match_context = ARG1;
+    const ppc::Gp bitdata = ARG2;
+    const ppc::Gp bin_position = ARG3;
+    const ppc::Gp bin_base = ARG4;
+
+    Label read_done = a.new_label();
+    Label ascii = a.new_label();
+    Label error = a.new_label();
+
+    /* Calculate the number of bytes remaining in the binary and error
+     * out if less than one. */
+    a.srdi(bitdata, bitdata, 3);
+    a.cmpdi(bitdata, imm(0));
+    a.beq(error);
+
+    /* Calculate a byte mask so we can zero out trailing garbage. */
+    a.sldi(TMP5, bitdata, 3);
+    a.subfic(TMP5, TMP5, imm(64));
+    mov_imm(TMP4, -1);
+    a.sld(TMP4, TMP4, TMP5);
+
+    /* If the position in the binary is not byte-aligned, we'll need
+     * to read one more byte. Subtracting one from a non-zero value
+     * sets the carry. */
+    a.andi_rc(TMP1, bin_position, imm(7));
+    a.addic(LR_TMP, TMP1, imm(-1));
+    a.addze(bitdata, bitdata);
+
+    /* Set up pointer to the first byte to read. */
+    a.srdi(TMP2, bin_position, 3);
+    a.add(TMP2, bin_base, TMP2);
+
+    /* Read one to four bytes, with the first one ending up in the most
+     * significant byte. None of the instructions between the compares
+     * and the branches change CR0. */
+    a.lbz(TMP6, ppc::Mem(TMP2));
+    a.sldi(TMP6, TMP6, 56);
+    a.cmpdi(bitdata, imm(2));
+    a.blt(read_done);
+
+    a.lbz(TMP3, ppc::Mem(TMP2, 1));
+    a.sldi(TMP3, TMP3, 48);
+    a.or_(TMP6, TMP6, TMP3);
+    a.beq(read_done);
+
+    a.lbz(TMP3, ppc::Mem(TMP2, 2));
+    a.sldi(TMP3, TMP3, 40);
+    a.or_(TMP6, TMP6, TMP3);
+    a.cmpdi(bitdata, imm(3));
+    a.beq(read_done);
+
+    a.lbz(TMP3, ppc::Mem(TMP2, 3));
+    a.sldi(TMP3, TMP3, 32);
+    a.or_(TMP6, TMP6, TMP3);
+
+    /* Handle the bytes read. */
+    a.bind(read_done);
+    a.sld(bitdata, TMP6, TMP1);
+    a.and_(bitdata, bitdata, TMP4);
+    a.cmpdi(bitdata, imm(0));
+    a.bge(ascii);
+    a.b(labels[bs_get_utf8_shared]);
+
+    /* Handle plain old ASCII (code point < 128). */
+    a.bind(ascii);
+    a.addi(bin_position, bin_position, imm(8));
+    a.std(bin_position, ppc::Mem(match_context, start_offset));
+    a.srdi(ARG1, bitdata, 56 - _TAG_IMMED1_SIZE);
+    a.ori(ARG1, ARG1, imm(_TAG_IMMED1_SMALL));
+    a.blr();
+
+    /* Signal error. */
+    a.bind(error);
+    mov_imm(ARG1, 0);
+    a.blr();
+}
+
+/*
+ * ARG1 = pointer to match state
+ * ARG2 = 4 bytes read from the binary in big-endian order
+ * ARG3 = position in binary in bits
+ *
+ * On successful return, the extracted code point is a term tagged
+ * small in ARG1 and the position in the match state has been updated. On
+ * failure, ARG1 contains an invalid term where the tags bits are zero.
+ */
+void BeamGlobalAssembler::emit_bs_get_utf8_shared() {
+    const int start_offset = offsetof(ErlSubBits, start);
+
+    const ppc::Gp match_context = ARG1;
+    const ppc::Gp bitdata = ARG2;
+    const ppc::Gp bin_position = ARG3;
+
+    const ppc::Gp byte_count = ARG4;
+
+    const ppc::Gp shift = TMP4;
+    const ppc::Gp control_mask = TMP5;
+    const ppc::Gp error_mask = TMP6;
+
+    /* All errors are collected in this condition register bit. */
+    const auto failed = ppc::cr1.gt();
+
+    /* UTF-8 has the following layout, where 'x' are data bits:
+     *
+     * 1 byte:  0xxxxxxx (not handled by this path)
+     * 2 bytes: 110xxxxx, 10xxxxxx
+     * 3 bytes: 1110xxxx, 10xxxxxx 10xxxxxx
+     * 4 bytes: 11110xxx, 10xxxxxx 10xxxxxx 10xxxxxx
+     *
+     * Note that the number of leading bits is equal to the number of bytes,
+     * which makes it very easy to create masks for extraction and error
+     * checking. */
+
+    /* Calculate the number of bytes by counting the leading ones. */
+    a.nor(TMP1, bitdata, bitdata);
+    a.cntlzd(byte_count, TMP1);
+
+    /* Get rid of the prefix bits. */
+    a.sld(bitdata, bitdata, byte_count);
+    a.srd(bitdata, bitdata, byte_count);
+
+    /* Calculate the bit shift. */
+    a.sldi(shift, byte_count, 3);
+    a.subfic(shift, shift, imm(64));
+
+    /* Shift down the value to the least significant part of the word. */
+    a.srd(bitdata, bitdata, shift);
+
+    /* Matches the '10xxxxxx' components, leaving the header byte alone. */
+    mov_imm(error_mask, 0x00808080ull << 32);
+    a.srd(error_mask, error_mask, shift);
+
+    /* Construct the control mask '0x00C0C0C0' (already shifted). */
+    a.srdi(control_mask, error_mask, 1);
+    a.or_(control_mask, control_mask, error_mask);
+
+    /* Assert that the header bits of each '10xxxxxx' component are
+     * correct. */
+    a.and_(TMP3, bitdata, control_mask);
+    a.cmpd(ppc::cr0, TMP3, error_mask);
+
+    /* Gather the data bits of the four bytes. */
+    a.rlwinm(TMP1, bitdata, imm(30), imm(20), imm(25));
+    a.rlwinm(TMP2, bitdata, imm(28), imm(14), imm(19));
+    a.rlwinm(TMP3, bitdata, imm(26), imm(11), imm(13));
+    a.clrldi(bitdata, bitdata, 58);
+
+    a.or_(bitdata, bitdata, TMP1);
+    a.or_(bitdata, bitdata, TMP2);
+    a.or_(bitdata, bitdata, TMP3);
+
+    /* Check for too large code point. */
+    mov_imm(TMP1, 0x10FFFF);
+    a.cmpld(ppc::cr1, bitdata, TMP1);
+
+    /* Check for the illegal range 16#D800 - 16#DFFF. */
+    a.srdi(TMP1, bitdata, 11);
+    a.cmpdi(ppc::cr5, TMP1, imm(0xD800 >> 11));
+
+    /* Test for overlong UTF-8 sequence. That can be done by testing
+     * that the bits marked y below are all zero.
+     *
+     * 1 byte:  0xxxxxxx (not handled by this path)
+     * 2 bytes: 110yyyyx, 10xxxxxx
+     * 3 bytes: 1110yyyy, 10yxxxxx 10xxxxxx
+     * 4 bytes: 11110yyy, 10yyxxxx 10xxxxxx 10xxxxxx
+     *
+     * 1 byte:                   xx'xxxxx
+     * 2 bytes:             y'yyyxx'xxxxx
+     * 3 bytes:       y'yyyyx'xxxxx'xxxxx
+     * 4 bytes: y'yyyyx'xxxxx'xxxxx'xxxxx
+     *
+     * The y bits can be isolated by shifting down by the number of bits
+     * shown in this table:
+     *
+     * 2:  7    (byte_count * 4 - 1)
+     * 3: 11    (byte_count * 4 - 1)
+     * 4: 16    (byte_count * 4)
+     */
+
+    /* Calculate number of bits to shift. Dividing the byte count by
+     * four gives one for four bytes and zero for two and three. */
+    a.sldi(TMP1, byte_count, 2);
+    a.srdi(TMP2, byte_count, 2);
+    a.add(TMP1, TMP1, TMP2);
+    a.addi(TMP1, TMP1, imm(-1));
+
+    /* Now isolate the y bits and compare to zero. */
+    a.srd(TMP1, bitdata, TMP1);
+    a.cmpdi(ppc::cr6, TMP1, imm(0));
+
+    /* Byte count must be 2, 3, or 4. */
+    a.addi(TMP1, byte_count, imm(-2));
+    a.cmpldi(ppc::cr7, TMP1, imm(2));
+
+    /* Combine the results of the five tests above. */
+    a.crorc(failed, failed, ppc::cr0.eq());
+    a.cror(failed, failed, ppc::cr5.eq());
+    a.cror(failed, failed, ppc::cr6.eq());
+    a.cror(failed, failed, ppc::cr7.gt());
+
+    /* If we have failed, we set byte_count to zero to ensure that the
+     * position update nops, and set the pre-tagged result to zero so
+     * that we can check for error in module code by testing the tag
+     * bits.
+     *
+     * The condition is inverted first, because the zero has to be the
+     * second source of isel; r0 cannot be used as its first source. */
+    mov_imm(TMP2, _TAG_IMMED1_SMALL);
+    mov_imm(LR_TMP, 0);
+    a.crnot(failed, failed);
+    a.isel(byte_count, byte_count, LR_TMP, failed);
+    a.isel(TMP2, TMP2, LR_TMP, failed);
+
+    a.sldi(TMP1, byte_count, 3);
+    a.add(bin_position, bin_position, TMP1);
+    a.std(bin_position, ppc::Mem(match_context, start_offset));
+    a.sldi(bitdata, bitdata, _TAG_IMMED1_SIZE);
+    a.or_(ARG1, TMP2, bitdata);
+
+    a.blr();
+}
+
+void BeamModuleAssembler::emit_bs_get_utf8(const ArgRegister &Ctx,
+                                           const ArgLabel &Fail) {
+    const int base_offset = offsetof(ErlSubBits, base_flags);
+    const int start_offset = offsetof(ErlSubBits, start);
+    const int end_offset = offsetof(ErlSubBits, end);
+
+    const ppc::Gp match_context = ARG1;
+    const ppc::Gp bitdata = ARG2;
+    const ppc::Gp bin_position = ARG3;
+    const ppc::Gp bin_base = ARG4;
+    const ppc::Gp bin_size = ARG5;
+
+    auto ctx = load_source(Ctx, ARG6);
+
+    Label non_ascii = a.new_label();
+    Label fallback = a.new_label();
+    Label check = a.new_label();
+    Label done = a.new_label();
+
+    emit_untag_ptr(match_context, ctx.reg);
+
+    a.ld(bin_position, ppc::Mem(ARG1, start_offset));
+    a.ld(bin_size, ppc::Mem(ARG1, end_offset));
+    a.ld(bin_base, ppc::Mem(ARG1, base_offset));
+    ERTS_CT_ASSERT(ERL_SUB_BITS_FLAG_MASK == 3);
+    a.clrrdi(bin_base, bin_base, 2);
+    a.sub(bitdata, bin_size, bin_position);
+    a.cmpldi(bitdata, imm(32));
+    a.blt(fallback);
+
+    emit_read_bits(32, bin_base, bin_position, bitdata);
+    a.cmpdi(bitdata, imm(0));
+    a.blt(non_ascii);
+
+    /* Handle plain old ASCII (code point < 128). */
+    a.addi(bin_position, bin_position, imm(8));
+    a.std(bin_position, ppc::Mem(ARG1, start_offset));
+    a.srdi(ARG1, bitdata, 56 - _TAG_IMMED1_SIZE);
+    a.ori(ARG1, ARG1, imm(_TAG_IMMED1_SMALL));
+    a.b(done);
+
+    /* Handle code point >= 128. */
+    a.bind(non_ascii);
+    fragment_call(ga->get_bs_get_utf8_shared());
+    a.b(check);
+
+    /*
+     * Handle the case that there are not 4 bytes available in the binary.
+     */
+
+    a.bind(fallback);
+    fragment_call(ga->get_bs_get_utf8_short_shared());
+
+    a.bind(check);
+    ERTS_CT_ASSERT((_TAG_IMMED1_SMALL & 1) != 0);
+    a.andi_rc(LR_TMP, ARG1, imm(1));
+    a.beq(resolve_beam_label(Fail, disp32K));
+
+    a.bind(done);
+}
+
+void BeamModuleAssembler::emit_i_bs_get_utf8(const ArgRegister &Ctx,
+                                             const ArgLabel &Fail,
+                                             const ArgRegister &Dst) {
+    emit_bs_get_utf8(Ctx, Fail);
+    mov_arg(Dst, ARG1);
+}
+
+void BeamModuleAssembler::emit_i_bs_skip_utf8(const ArgRegister &Ctx,
+                                              const ArgLabel &Fail) {
+    emit_bs_get_utf8(Ctx, Fail);
+}
+
+void BeamModuleAssembler::emit_bs_get_utf16(const ArgRegister &Ctx,
+                                            const ArgLabel &Fail,
+                                            const ArgWord &Flags) {
+    auto ctx_reg = load_source(Ctx, TMP1);
+
+    emit_untag_ptr(ARG1, ctx_reg.reg);
+
+    emit_enter_runtime();
+
+    mov_imm(ARG2, Flags.get());
+    runtime_call<Eterm (*)(ErlSubBits *, Uint), erts_bs_get_utf16>();
+
+    emit_leave_runtime();
+
+    emit_branch_if_not_value(ARG1, resolve_beam_label(Fail, dispUnknown));
+}
+
+void BeamModuleAssembler::emit_i_bs_get_utf16(const ArgRegister &Ctx,
+                                              const ArgLabel &Fail,
+                                              const ArgWord &Flags,
+                                              const ArgRegister &Dst) {
+    emit_bs_get_utf16(Ctx, Fail, Flags);
+    mov_arg(Dst, ARG1);
+}
+
+void BeamModuleAssembler::emit_i_bs_skip_utf16(const ArgRegister &Ctx,
+                                               const ArgLabel &Fail,
+                                               const ArgWord &Flags) {
+    emit_bs_get_utf16(Ctx, Fail, Flags);
+}
+
+void BeamModuleAssembler::emit_validate_unicode(Label next,
+                                                Label fail,
+                                                ppc::Gp value) {
+    ASSERT(value != TMP2 && value != SUPER_TMP);
+
+    a.andi_rc(TMP2, value, imm(_TAG_IMMED1_MASK));
+    a.cmpdi(TMP2, imm(_TAG_IMMED1_SMALL));
+    a.bne(fail);
+
+    cmpl(value, make_small(0xD800UL));
+    a.blt(next);
+
+    cmpl(value, make_small(0xDFFFUL));
+    a.ble(fail);
+
+    cmpl(value, make_small(0x10FFFFUL));
+    a.bgt(fail);
+
+    a.b(next);
+}
+
+void BeamModuleAssembler::emit_i_bs_validate_unicode_retract(
+        const ArgLabel &Fail,
+        const ArgSource &Src,
+        const ArgRegister &Ms) {
+    Label fail = a.new_label(), next = a.new_label();
+    auto src_reg = load_source(Src, TMP1);
+
+    emit_validate_unicode(next, fail, src_reg.reg);
+
+    a.bind(fail);
+    {
+        const int start_offset = offsetof(ErlSubBits, start);
+        auto ctx_reg = load_source(Ms, TMP2);
+
+        load_mem(TMP1, emit_boxed_val(ctx_reg.reg, start_offset));
+        a.addi(TMP1, TMP1, imm(-32));
+        store_mem(TMP1, emit_boxed_val(ctx_reg.reg, start_offset));
+
+        ASSERT(Fail.get() != 0);
+        a.b(resolve_beam_label(Fail, disp32MB));
+    }
+
+    a.bind(next);
+}
+
 void BeamModuleAssembler::emit_bs_init_writable() {
     ERTS_CT_ASSERT(ERTS_HIGHEST_CALLEE_SAVE_XREG >= 0);
 

@@ -46,14 +46,6 @@ void BeamGlobalAssembler::emit_nyi(const char *msg) {
  * Shared fragments.
  */
 
-void BeamGlobalAssembler::emit_bs_get_utf8_shared() {
-    emit_nyi("bs_get_utf8_shared");
-}
-
-void BeamGlobalAssembler::emit_bs_get_utf8_short_shared() {
-    emit_nyi("bs_get_utf8_short_shared");
-}
-
 void BeamGlobalAssembler::emit_check_float_error() {
     emit_nyi("check_float_error");
 }
@@ -93,37 +85,6 @@ void BeamModuleAssembler::emit_get_record_field(const ArgLabel &,
                                                 const ArgAtom &,
                                                 const ArgRegister &) {
     emit_nyi("get_record_field");
-}
-
-void BeamModuleAssembler::emit_i_bs_get_utf16(const ArgRegister &,
-                                              const ArgLabel &,
-                                              const ArgWord &,
-                                              const ArgRegister &) {
-    emit_nyi("i_bs_get_utf16");
-}
-
-void BeamModuleAssembler::emit_i_bs_get_utf8(const ArgRegister &,
-                                             const ArgLabel &,
-                                             const ArgRegister &) {
-    emit_nyi("i_bs_get_utf8");
-}
-
-void BeamModuleAssembler::emit_i_bs_skip_utf16(const ArgRegister &,
-                                               const ArgLabel &,
-                                               const ArgWord &) {
-    emit_nyi("i_bs_skip_utf16");
-}
-
-void BeamModuleAssembler::emit_i_bs_skip_utf8(const ArgRegister &,
-                                              const ArgLabel &) {
-    emit_nyi("i_bs_skip_utf8");
-}
-
-void BeamModuleAssembler::emit_i_bs_validate_unicode_retract(
-        const ArgLabel &,
-        const ArgSource &,
-        const ArgRegister &) {
-    emit_nyi("i_bs_validate_unicode_retract");
 }
 
 void BeamModuleAssembler::emit_i_create_local_native_record(
