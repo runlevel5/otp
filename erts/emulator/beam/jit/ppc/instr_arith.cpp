@@ -113,6 +113,340 @@ void BeamGlobalAssembler::emit_bitwise_fallback_body(const ErtsCodeMFA *mfa) {
     }
 }
 
+/*
+ * Branches to `next` if both operands are small and the sum or
+ * difference in ARG1 did not overflow.
+ *
+ * There is no cheap way to read a non-sticky overflow flag on all the
+ * processors we support, so the overflow is derived from the signs of
+ * the operands and the result instead.
+ *
+ * Clobbers TMP1.
+ */
+void BeamModuleAssembler::emit_add_sub_types(bool is_small_result,
+                                             bool is_sub,
+                                             const ArgSource &LHS,
+                                             const ppc::Gp lhs_reg,
+                                             const ArgSource &RHS,
+                                             const ppc::Gp rhs_reg,
+                                             const Label next) {
+    if (is_small_result) {
+        comment("skipped overflow test because the result is always small");
+        emit_are_both_small(LHS, lhs_reg, RHS, rhs_reg, next);
+    } else if (RHS.isLiteral()) {
+        /* Skipping test for small */
+    } else {
+        const bool both_small = always_small(LHS) && always_small(RHS);
+        bool overflow_is_lt = true;
+
+        /* andi. always sets CR0, so the test for small operands must
+         * come before the test for overflow. */
+        if (both_small) {
+            comment("skipped test for small operands since they are always "
+                    "small");
+        } else {
+            if (always_small(RHS)) {
+                a.andi_rc(TMP1, lhs_reg, imm(_TAG_IMMED1_MASK));
+            } else if (always_small(LHS)) {
+                a.andi_rc(TMP1, rhs_reg, imm(_TAG_IMMED1_MASK));
+            } else {
+                ERTS_CT_ASSERT(_TAG_IMMED1_SMALL == _TAG_IMMED1_MASK);
+                a.and_(TMP1, lhs_reg, rhs_reg);
+                a.andi_rc(TMP1, TMP1, imm(_TAG_IMMED1_MASK));
+            }
+            a.cmpdi(ppc::cr1, TMP1, imm(_TAG_IMMED1_SMALL));
+        }
+
+        if (RHS.isSmall()) {
+            /* Adding a non-negative constant overflows if and only if
+             * the result is less than the left operand, and so on. */
+            bool is_negative = RHS.as<ArgSmall>().getSigned() < 0;
+
+            overflow_is_lt = is_negative == is_sub;
+            a.cmpd(ARG1, lhs_reg);
+        } else if (is_sub) {
+            /* The operands have different signs, and the sign of the
+             * result differs from the sign of the left operand. */
+            a.xor_(LR_TMP, lhs_reg, rhs_reg);
+            a.xor_(TMP1, lhs_reg, ARG1);
+            a.and_rc(LR_TMP, LR_TMP, TMP1);
+        } else {
+            /* The sign of the result differs from the signs of both
+             * operands. */
+            a.xor_(LR_TMP, ARG1, lhs_reg);
+            a.xor_(TMP1, ARG1, rhs_reg);
+            a.and_rc(LR_TMP, LR_TMP, TMP1);
+        }
+
+        comment("test for not overflow and small operands");
+        if (both_small) {
+            if (overflow_is_lt) {
+                a.bge(next);
+            } else {
+                a.ble(next);
+            }
+        } else {
+            if (overflow_is_lt) {
+                a.crandc(ppc::cr0.eq(), ppc::cr1.eq(), ppc::cr0.lt());
+            } else {
+                a.crandc(ppc::cr0.eq(), ppc::cr1.eq(), ppc::cr0.gt());
+            }
+            a.beq(next);
+        }
+    }
+}
+
+/*
+ * ARG2 = LHS
+ * ARG3 = RHS
+ *
+ * The module code must have executed emit_enter_runtime()
+ * before calling this function.
+ *
+ * The result is returned in ARG1.
+ */
+void BeamGlobalAssembler::emit_plus_body_shared() {
+    static const ErtsCodeMFA bif_mfa = {am_erlang, am_Plus, 2};
+    emit_bitwise_fallback_body<Eterm (*)(Process *, Eterm, Eterm),
+                               erts_mixed_plus>(&bif_mfa);
+}
+
+void BeamModuleAssembler::emit_i_plus(const ArgLabel &Fail,
+                                      const ArgWord &Live,
+                                      const ArgSource &LHS,
+                                      const ArgSource &RHS,
+                                      const ArgRegister &Dst) {
+    bool is_small_result = is_sum_small_if_args_are_small(LHS, RHS);
+
+    if (always_small(LHS) && always_small(RHS) && is_small_result) {
+        auto dst = init_destination(Dst, ARG1);
+        if (RHS.isSmall()) {
+            auto lhs = load_source(LHS);
+            Sint cleared_tag = RHS.as<ArgSmall>().get() & ~_TAG_IMMED1_MASK;
+            comment("add small constant without overflow check");
+            add(dst.reg, lhs.reg, cleared_tag);
+        } else {
+            auto [lhs, rhs] = load_sources(LHS, ARG2, RHS, ARG3);
+            comment("addition without overflow check");
+            a.clrrdi(TMP1, rhs.reg, _TAG_IMMED1_SIZE);
+            a.add(dst.reg, lhs.reg, TMP1);
+        }
+        flush_var(dst);
+        return;
+    }
+
+    Label next = a.new_label();
+
+    auto [lhs, rhs] = load_sources(LHS, ARG2, RHS, ARG3);
+
+    if (RHS.isLiteral()) {
+        comment("skipped test for small because one operand is never small");
+    } else if (RHS.isSmall()) {
+        Sint cleared_tag = RHS.as<ArgSmall>().get() & ~_TAG_IMMED1_MASK;
+        add(ARG1, lhs.reg, cleared_tag);
+    } else {
+        a.clrrdi(TMP1, rhs.reg, _TAG_IMMED1_SIZE);
+        a.add(ARG1, lhs.reg, TMP1);
+    }
+
+    emit_add_sub_types(is_small_result,
+                       false,
+                       LHS,
+                       lhs.reg,
+                       RHS,
+                       rhs.reg,
+                       next);
+
+    mov_var(ARG2, lhs);
+    mov_var(ARG3, rhs);
+
+    if (Fail.get() != 0) {
+        emit_enter_runtime<Update::eReductions>(Live.get());
+        a.mr(ARG1, c_p);
+        runtime_call<Eterm (*)(Process *, Eterm, Eterm), erts_mixed_plus>();
+        emit_leave_runtime<Update::eReductions>(Live.get());
+
+        emit_branch_if_not_value(ARG1, resolve_beam_label(Fail, dispUnknown));
+    } else {
+        emit_enter_runtime<Update::eReductions>(Live.get());
+        fragment_call(ga->get_plus_body_shared());
+        emit_leave_runtime<Update::eReductions>(Live.get());
+    }
+
+    a.bind(next);
+    mov_arg(Dst, ARG1);
+}
+
+/*
+ * ARG2 = Src
+ *
+ * The module code must have executed emit_enter_runtime()
+ * before calling this function.
+ *
+ * The result is returned in ARG1.
+ */
+void BeamGlobalAssembler::emit_unary_minus_body_shared() {
+    Label error = a.new_label();
+
+    emit_enter_runtime_frame();
+
+    /* Save original argument for the error path. */
+    a.std(ARG2, TMP_MEM1q);
+
+    a.mr(ARG1, c_p);
+    runtime_call<Eterm (*)(Process *, Eterm), erts_unary_minus>();
+
+    emit_leave_runtime_frame();
+
+    emit_branch_if_not_value(ARG1, error);
+
+    a.blr();
+
+    a.bind(error);
+    {
+        static const ErtsCodeMFA bif_mfa = {am_erlang, am_Minus, 1};
+
+        /* emit_enter_runtime() was done in the module code. */
+        emit_leave_runtime(0);
+
+        /* Place the original argument in an X register. */
+        a.ld(XREG0, TMP_MEM1q);
+        mov_imm(ARG4, &bif_mfa);
+        a.b(labels[raise_exception]);
+    }
+}
+
+void BeamModuleAssembler::emit_i_unary_minus(const ArgLabel &Fail,
+                                             const ArgWord &Live,
+                                             const ArgSource &Src,
+                                             const ArgRegister &Dst) {
+    auto src = load_source(Src, ARG2);
+    auto zero = ArgImmed(make_small(0));
+    bool is_small_result = is_diff_small_if_args_are_small(zero, Src);
+
+    a.clrrdi(TMP2, src.reg, _TAG_IMMED1_SIZE);
+
+    if (always_small(Src) && is_small_result) {
+        auto dst = init_destination(Dst, ARG1);
+        comment("no overflow test because result is always small");
+        a.neg(dst.reg, TMP2);
+        a.ori(dst.reg, dst.reg, imm(_TAG_IMMED1_SMALL));
+        flush_var(dst);
+        return;
+    }
+
+    Label next = a.new_label();
+
+    if (!always_small(Src)) {
+        a.andi_rc(TMP1, src.reg, imm(_TAG_IMMED1_MASK));
+        a.cmpdi(ppc::cr1, TMP1, imm(_TAG_IMMED1_SMALL));
+    }
+
+    /* The negation overflows if and only if the operand and the result
+     * are both negative. */
+    a.neg(ARG1, TMP2);
+    a.and_rc(LR_TMP, TMP2, ARG1);
+    a.ori(ARG1, ARG1, imm(_TAG_IMMED1_SMALL));
+
+    /* Test for not overflow AND small operands. */
+    if (always_small(Src)) {
+        a.bge(next);
+    } else {
+        a.crandc(ppc::cr0.eq(), ppc::cr1.eq(), ppc::cr0.lt());
+        a.beq(next);
+    }
+
+    mov_var(ARG2, src);
+    if (Fail.get() != 0) {
+        emit_enter_runtime<Update::eReductions>(Live.get());
+        a.mr(ARG1, c_p);
+        runtime_call<Eterm (*)(Process *, Eterm), erts_unary_minus>();
+        emit_leave_runtime<Update::eReductions>(Live.get());
+
+        emit_branch_if_not_value(ARG1, resolve_beam_label(Fail, dispUnknown));
+    } else {
+        emit_enter_runtime<Update::eReductions>(Live.get());
+        fragment_call(ga->get_unary_minus_body_shared());
+        emit_leave_runtime<Update::eReductions>(Live.get());
+    }
+
+    a.bind(next);
+    mov_arg(Dst, ARG1);
+}
+
+/*
+ * ARG2 = LHS
+ * ARG3 = RHS
+ *
+ * The module code must have executed emit_enter_runtime()
+ * before calling this function.
+ *
+ * The result is returned in ARG1.
+ */
+void BeamGlobalAssembler::emit_minus_body_shared() {
+    static const ErtsCodeMFA bif_mfa = {am_erlang, am_Minus, 2};
+    emit_bitwise_fallback_body<Eterm (*)(Process *, Eterm, Eterm),
+                               erts_mixed_minus>(&bif_mfa);
+}
+
+void BeamModuleAssembler::emit_i_minus(const ArgLabel &Fail,
+                                       const ArgWord &Live,
+                                       const ArgSource &LHS,
+                                       const ArgSource &RHS,
+                                       const ArgRegister &Dst) {
+    bool is_small_result = is_diff_small_if_args_are_small(LHS, RHS);
+
+    if (always_small(LHS) && always_small(RHS) && is_small_result) {
+        auto dst = init_destination(Dst, ARG1);
+        if (RHS.isSmall()) {
+            auto lhs = load_source(LHS);
+            Sint cleared_tag = RHS.as<ArgSmall>().get() & ~_TAG_IMMED1_MASK;
+            comment("subtract small constant without overflow check");
+            sub(dst.reg, lhs.reg, cleared_tag);
+        } else {
+            auto [lhs, rhs] = load_sources(LHS, ARG2, RHS, ARG3);
+            comment("subtraction without overflow check");
+            a.clrrdi(TMP1, rhs.reg, _TAG_IMMED1_SIZE);
+            a.sub(dst.reg, lhs.reg, TMP1);
+        }
+        flush_var(dst);
+        return;
+    }
+
+    Label next = a.new_label();
+    auto [lhs, rhs] = load_sources(LHS, ARG2, RHS, ARG3);
+
+    if (RHS.isLiteral()) {
+        comment("skipped test for small because one operand is never small");
+    } else if (RHS.isSmall()) {
+        Sint cleared_tag = RHS.as<ArgSmall>().get() & ~_TAG_IMMED1_MASK;
+        sub(ARG1, lhs.reg, cleared_tag);
+    } else {
+        a.clrrdi(TMP1, rhs.reg, _TAG_IMMED1_SIZE);
+        a.sub(ARG1, lhs.reg, TMP1);
+    }
+
+    emit_add_sub_types(is_small_result, true, LHS, lhs.reg, RHS, rhs.reg, next);
+
+    mov_var(ARG2, lhs);
+    mov_var(ARG3, rhs);
+
+    if (Fail.get() != 0) {
+        emit_enter_runtime<Update::eReductions>(Live.get());
+        a.mr(ARG1, c_p);
+        runtime_call<Eterm (*)(Process *, Eterm, Eterm), erts_mixed_minus>();
+        emit_leave_runtime<Update::eReductions>(Live.get());
+        emit_branch_if_not_value(ARG1, resolve_beam_label(Fail, dispUnknown));
+    } else {
+        emit_enter_runtime<Update::eReductions>(Live.get());
+        fragment_call(ga->get_minus_body_shared());
+        emit_leave_runtime<Update::eReductions>(Live.get());
+    }
+
+    a.bind(next);
+    mov_arg(Dst, ARG1);
+}
+
 void BeamGlobalAssembler::emit_i_band_body_shared() {
     static const ErtsCodeMFA bif_mfa = {am_erlang, am_band, 2};
     emit_bitwise_fallback_body<Eterm (*)(Process *, Eterm, Eterm), erts_band>(
