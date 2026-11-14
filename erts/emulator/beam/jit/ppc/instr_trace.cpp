@@ -1,0 +1,239 @@
+/*
+ * %CopyrightBegin%
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Copyright Ericsson AB 2020-2026. All Rights Reserved.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ * %CopyrightEnd%
+ */
+#include "beam_asm.hpp"
+
+extern "C"
+{
+#include "beam_common.h"
+#include "erl_bif_table.h"
+#include "beam_bp.h"
+};
+
+/* This function is jumped to from the export entry of a function.
+ *
+ * ARG1 = export entry */
+void BeamGlobalAssembler::emit_generic_bp_global() {
+    /* Enter an Erlang frame to make the stack consistent with local
+     * breakpoints. */
+    emit_enter_erlang_frame();
+
+    lea(ARG2, ppc::Mem(ARG1, offsetof(Export, info)));
+
+    emit_enter_runtime<Update::eHeapAlloc | Update::eXRegs |
+                       Update::eReductions>();
+
+    a.mr(ARG1, c_p);
+    /* ARG2 is already set above */
+    load_x_reg_array(ARG3);
+    runtime_call<BeamInstr (*)(Process *, ErtsCodeInfo *, Eterm *),
+                 erts_generic_breakpoint>();
+
+    emit_leave_runtime<Update::eHeapAlloc | Update::eXRegs |
+                       Update::eReductions>();
+
+    /* This is technically a tail call so we must leave the current frame
+     * before jumping. Note that we might not leave the frame we entered
+     * earlier in this function, but one added by erts_generic_breakpoint. */
+    emit_leave_erlang_frame();
+    a.mtctr(ARG1);
+    a.bctr();
+}
+
+/* This function is called from the module header, which is in turn called from
+ * the prologue of the traced function. As such, the real return address is in
+ * the runtime frame of our caller rather than in the link register.
+ *
+ * See beam_asm.h for more details */
+void BeamGlobalAssembler::emit_generic_bp_local() {
+    a.ld(ARG2, ppc::Mem(sp, RUNTIME_FRAME_SIZE + RUNTIME_FRAME_LR_OFFSET));
+
+    /* Stash return address for later use in `debug_bp` */
+    a.std(ARG2, TMP_MEM1q);
+
+    /* Our actual return address is valid (and word-aligned), but it points
+     * just after the trampoline word so we'll need to skip that to find our
+     * ErtsCodeInfo. */
+    sub(ARG2, ARG2, BEAM_ASM_BP_RETURN_OFFSET + sizeof(ErtsCodeInfo));
+
+    emit_enter_runtime_frame();
+    emit_enter_runtime<Update::eHeapAlloc | Update::eXRegs |
+                       Update::eReductions>();
+
+    a.mr(ARG1, c_p);
+    /* ARG2 is already set above */
+    load_x_reg_array(ARG3);
+    runtime_call<BeamInstr (*)(Process *, ErtsCodeInfo *, Eterm *),
+                 erts_generic_breakpoint>();
+
+    emit_leave_runtime<Update::eHeapAlloc | Update::eXRegs |
+                       Update::eReductions>();
+
+    cmp(ARG1, BeamOpCodeAddr(op_i_debug_breakpoint));
+    far_beq(labels[debug_bp]);
+
+    emit_leave_runtime_frame();
+    a.blr();
+}
+
+/* This function is called from the module header which is called from the
+ * prologue of the function to trace. See beam_asm.h for more details
+ *
+ * The only place that we can come to here is from generic_bp_local */
+void BeamGlobalAssembler::emit_debug_bp() {
+    Label error = a.new_label();
+
+    /* Read and adjust the return address we saved in generic_bp_local. */
+    a.ld(ARG2, TMP_MEM1q);
+    sub(ARG2, ARG2, BEAM_ASM_BP_RETURN_OFFSET + sizeof(ErtsCodeMFA));
+
+    emit_enter_runtime<Update::eHeapAlloc | Update::eXRegs |
+                       Update::eReductions>();
+
+    a.mr(ARG1, c_p);
+    load_x_reg_array(ARG3);
+    mov_imm(ARG4, am_breakpoint);
+    runtime_call<
+            const Export *(*)(Process *, const ErtsCodeMFA *, Eterm *, Eterm),
+            call_error_handler>();
+
+    emit_leave_runtime<Update::eHeapAlloc | Update::eXRegs |
+                       Update::eReductions>();
+
+    /* We skip two runtime frames (ours and the one entered in the module
+     * header) so that we can call the error handler's code instead of
+     * `call_nif_early`, if necessary. */
+    emit_leave_runtime_frame();
+    emit_leave_runtime_frame();
+
+    cmp(ARG1, 0);
+    a.beq(error);
+
+    emit_leave_erlang_frame();
+    branch(emit_setup_dispatchable_call(ARG1));
+
+    a.bind(error);
+    {
+        a.ld(ARG2, TMP_MEM1q);
+        mov_imm(ARG4, 0);
+
+        a.b(labels[raise_exception_shared]);
+    }
+}
+
+static void return_trace(Process *c_p,
+                         ErtsCodeMFA *mfa,
+                         Eterm val,
+                         ErtsTracer tracer,
+                         Eterm session_id) {
+    ERTS_UNREQ_PROC_MAIN_LOCK(c_p);
+    erts_trace_return(c_p, mfa, val, tracer, session_id);
+    ERTS_REQ_PROC_MAIN_LOCK(c_p);
+}
+
+void BeamModuleAssembler::emit_return_trace() {
+    a.ld(ARG2, getYRef(0));
+    a.mr(ARG3, XREG0);
+    a.ld(ARG4, getYRef(1)); /* tracer */
+    a.ld(ARG5, getYRef(2)); /* session_id */
+
+    ERTS_CT_ASSERT(ERTS_HIGHEST_CALLEE_SAVE_XREG >= 1);
+    emit_enter_runtime<Update::eHeapAlloc>(1);
+
+    a.mr(ARG1, c_p);
+    runtime_call<void (*)(Process *, ErtsCodeMFA *, Eterm, ErtsTracer, Eterm),
+                 return_trace>();
+
+    emit_leave_runtime<Update::eHeapAlloc>(1);
+
+    emit_deallocate(ArgWord(BEAM_RETURN_TRACE_FRAME_SZ));
+
+    /* Return and set c_p->i to avoid calls to BeamIsReturnTrace(c_p->i)
+       to assume there is still a trace frame on the stack. */
+    emit_return_do(true);
+}
+
+void BeamModuleAssembler::emit_i_call_trace_return() {
+    /* Pass prev_info if present (is a CP), otherwise null. */
+    a.ld(ARG2, getYRef(0));
+    mov_imm(ARG4, 0);
+
+    a.andi_rc(LR_TMP, ARG2, imm(_CPMASK));
+    a.addi(ARG2, ARG2, imm(-(Sint)sizeof(ErtsCodeInfo)));
+    a.isel(ARG2, ARG2, ARG4, ppc::cr0.eq());
+    a.ld(ARG3, getYRef(1));
+    a.ld(ARG4, getYRef(2));
+
+    ERTS_CT_ASSERT(ERTS_HIGHEST_CALLEE_SAVE_XREG >= 1);
+    emit_enter_runtime<Update::eHeapAlloc>(1);
+
+    a.mr(ARG1, c_p);
+    runtime_call<void (*)(Process *, const ErtsCodeInfo *, Eterm, Eterm),
+                 erts_call_trace_return>();
+
+    emit_leave_runtime<Update::eHeapAlloc>(1);
+
+    emit_deallocate(ArgWord(BEAM_RETURN_CALL_ACC_TRACE_FRAME_SZ));
+
+    /* Return and set c_p->i to avoid calls to BeamIsReturnCallAccTrace(c_p->i)
+       to assume there is still a trace frame on the stack. */
+    emit_return_do(true);
+}
+
+void BeamModuleAssembler::emit_i_return_to_trace() {
+    a.ld(ARG2, getYRef(0)); /* session_id */
+    a.addi(ARG3, E, imm(BEAM_RETURN_TO_TRACE_FRAME_SZ * sizeof(Eterm)));
+
+    ERTS_CT_ASSERT(ERTS_HIGHEST_CALLEE_SAVE_XREG >= 1);
+
+    emit_enter_runtime<Update::eHeapAlloc>(1);
+
+    a.mr(ARG1, c_p);
+    runtime_call<void (*)(Process *, Eterm, Eterm *),
+                 beam_jit_return_to_trace>();
+
+    emit_leave_runtime<Update::eHeapAlloc>(1);
+
+    emit_deallocate(ArgWord(BEAM_RETURN_TO_TRACE_FRAME_SZ));
+
+    /* Return and set c_p->i to avoid calls to BeamIsReturnToTrace(c_p->i)
+       to assume there is still a trace frame on the stack. */
+    emit_return_do(true);
+}
+
+void BeamModuleAssembler::emit_i_hibernate() {
+    emit_enter_runtime<Update::eReductions | Update::eHeap | Update::eStack>(0);
+
+    a.mr(ARG1, c_p);
+    load_x_reg_array(ARG2);
+    mov_imm(ARG3, 0);
+    runtime_call<void (*)(Process *, Eterm *, int), erts_hibernate>();
+
+    emit_leave_runtime<Update::eReductions | Update::eHeap | Update::eStack>(0);
+
+    a.lwz(TMP1, ppc::Mem(c_p, offsetof(Process, flags)));
+    mov_imm(TMP2, F_HIBERNATE_SCHED);
+    a.andc(TMP1, TMP1, TMP2);
+    a.stw(TMP1, ppc::Mem(c_p, offsetof(Process, flags)));
+
+    mov_imm(XREG0, am_ok);
+    fragment_call(ga->get_dispatch_return());
+}

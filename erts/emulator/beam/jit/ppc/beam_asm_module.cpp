@@ -176,6 +176,65 @@ void BeamModuleAssembler::emit_i_nif_padding() {
     }
 }
 
+void BeamGlobalAssembler::emit_i_breakpoint_trampoline_shared() {
+    constexpr ssize_t flag_offset =
+            sizeof(ErtsCodeInfo) + BEAM_ASM_BP_RETURN_OFFSET -
+            offsetof(ErtsCodeInfo, u.metadata.breakpoint_flag);
+
+    Label bp_and_nif = a.new_label(), bp_only = a.new_label(),
+          nif_only = a.new_label();
+
+    /* The link register must be left alone, as `call_nif_early` uses it to
+     * find the function we were called from. */
+    a.mflr(TMP1);
+    a.lbz(ARG1, ppc::Mem(TMP1, -flag_offset));
+
+    a.cmpdi(ARG1, imm(ERTS_ASM_BP_FLAG_BP_NIF_CALL_NIF_EARLY));
+    a.beq(bp_and_nif);
+    a.andi_rc(LR_TMP, ARG1, imm(ERTS_ASM_BP_FLAG_CALL_NIF_EARLY));
+    a.bne(nif_only);
+    a.andi_rc(LR_TMP, ARG1, imm(ERTS_ASM_BP_FLAG_BP));
+    a.bne(bp_only);
+
+#ifndef DEBUG
+    a.blr();
+#else
+    Label error = a.new_label();
+
+    /* ARG1 must be a valid breakpoint flag. */
+    a.cmpdi(ARG1, imm(0));
+    a.bne(error);
+    a.blr();
+
+    a.bind(error);
+    udf(0xBC0D);
+#endif
+
+    a.bind(bp_and_nif);
+    {
+        emit_enter_runtime_frame();
+        a.bl(labels[generic_bp_local]);
+        emit_leave_runtime_frame();
+
+        /* !! FALL THROUGH !! */
+    }
+
+    a.bind(nif_only);
+    {
+        /* call_nif_early returns on its own, unlike generic_bp_local. */
+        a.b(labels[call_nif_early]);
+    }
+
+    a.bind(bp_only);
+    {
+        emit_enter_runtime_frame();
+        a.bl(labels[generic_bp_local]);
+        emit_leave_runtime_frame();
+
+        a.blr();
+    }
+}
+
 void BeamModuleAssembler::emit_i_breakpoint_trampoline() {
     /* This little prologue is used by nif loading and tracing to insert
      * alternative instructions. */
@@ -200,6 +259,177 @@ void BeamModuleAssembler::emit_i_breakpoint_trampoline() {
 
     ASSERT((a.offset() - code.label_offset_from_base(current_label)) ==
            BEAM_ASM_FUNC_PROLOGUE_SIZE);
+}
+
+void BeamGlobalAssembler::emit_i_line_breakpoint_trampoline_shared() {
+    Label exit_trampoline = a.new_label();
+    Label dealloc_and_exit_trampoline = a.new_label();
+    Label after_gc_check = a.new_label();
+    Label dispatch_call = a.new_label();
+
+    const auto &saved_live = TMP_MEM1q;
+    const auto &saved_pc = TMP_MEM2q;
+    const auto &saved_stack_needed = TMP_MEM3q;
+
+    emit_enter_erlang_frame();
+
+    /* NB. TMP1 = live */
+    a.std(TMP1, saved_live); /* stash live */
+
+    /* Pass return address of trampoline, will be used to find current function
+     * info */
+    a.mflr(ARG1);
+    a.addi(ARG1, ARG1, imm(-8)); /* ARG1 := pc */
+    a.std(ARG1, saved_pc);       /* Stash pc */
+
+    /* START allocate live live */
+    a.mr(ARG4, TMP1);      /* ARG4 := live */
+    a.sldi(TMP1, TMP1, 3); /* TMP1 := stack-needed = live * sizeof(Eterm) */
+    a.std(TMP1, saved_stack_needed); /* stash stack-needed */
+
+    /* ARG3 := stack-needed + S_RESERVED * sizeof(Eterm) */
+    a.addi(ARG3, TMP1, imm(S_RESERVED * 8));
+
+    a.add(ARG3, ARG3, HTOP);
+    a.cmpld(ARG3, E);
+    a.ble(after_gc_check);
+
+    /* gc needed */
+    aligned_call(labels[garbage_collect]);
+    a.ld(TMP1, saved_stack_needed); /* TMP1 := (stashed) stack-needed */
+    a.bind(after_gc_check);
+
+    a.sub(E, E, TMP1);
+    /* END allocate live live */
+
+    a.mr(ARG1, c_p);
+    a.ld(ARG2, saved_pc); /* pc */
+    a.ld(ARG3, saved_live);
+    load_x_reg_array(ARG4);
+    a.mr(ARG5, E); /* stk */
+
+    emit_enter_runtime<Update::eXRegs>();
+    runtime_call<
+            const Export *(*)(Process *, ErtsCodePtr, Uint, Eterm *, UWord *),
+            erts_line_breakpoint_hit__prepare_call>();
+    emit_leave_runtime<Update::eXRegs>();
+
+    /* If non-null, ARG1 points to error_handler:breakpoint/4 */
+    cmp(ARG1, 0);
+    a.bne(dispatch_call);
+    a.ld(ARG1, saved_stack_needed); /* ARG1 := (stashed) stack-needed */
+    a.b(dealloc_and_exit_trampoline);
+
+    a.bind(dispatch_call);
+    erlang_call(emit_setup_dispatchable_call(ARG1));
+
+    a.bind(labels[i_line_breakpoint_cleanup]);
+    load_x_reg_array(ARG1);
+    a.mr(ARG2, E); /* stk */
+
+    emit_enter_runtime<Update::eXRegs>();
+    runtime_call<Uint (*)(Eterm *, UWord *),
+                 erts_line_breakpoint_hit__cleanup>();
+    emit_leave_runtime<Update::eXRegs>();
+
+    a.sldi(ARG1, ARG1, 3); /* ARG1 = stack-needed */
+
+    a.bind(dealloc_and_exit_trampoline); /* ASUMES ARG1 = stack-needed */
+    a.add(E, E, ARG1);
+
+    a.bind(exit_trampoline);
+    emit_leave_erlang_frame();
+    a.blr();
+}
+
+void BeamModuleAssembler::emit_i_line_breakpoint_trampoline() {
+    /* This prologue is used to implement line-breakpoints. The "b next" is
+     * rerouted to the instruction that follows it when the breakpoint is
+     * enabled, which will instead trigger the breakpoint when control goes
+     * through here */
+    Label next = a.new_label();
+    a.b(next);
+
+    a.bl(resolve_fragment(ga->get_i_line_breakpoint_trampoline_shared(),
+                          disp32MB));
+
+    a.bind(next);
+}
+
+enum erts_is_line_breakpoint BeamGlobalAssembler::is_line_breakpoint_trampoline(
+        ErtsCodePtr addr) {
+    auto pc = static_cast<const Uint32 *>(addr);
+    enum erts_is_line_breakpoint line_bp_type;
+
+    /* The b and bl opcodes take 6 bits, followed by a signed offset of 24
+     * bits that is given in 32-bit words, and the two bits that tell them
+     * apart. */
+    const Uint32 branch_mask = 0xFC000003;
+    const Uint32 b_opcode = 0x48000000;
+    const Uint32 bl_opcode = 0x48000001;
+    const auto branch_target = [](const Uint32 *pc) {
+        Sint32 offset = (Sint32)(*pc << 6) >> 6;
+
+        return pc + (offset >> 2);
+    };
+
+    switch (*pc) {
+    /* B .next .enabled: BL breakpoint_handler, .next: */
+    case b_opcode | (2 << 2):
+        line_bp_type = IS_DISABLED_LINE_BP;
+        break;
+
+    /* B .enabled .enabled: BL breakpoint_handler, .next: */
+    case b_opcode | (1 << 2):
+        line_bp_type = IS_ENABLED_LINE_BP;
+        break;
+
+    default:
+        return IS_NOT_LINE_BP;
+    }
+
+    pc++;
+
+    if ((*pc & branch_mask) != bl_opcode) {
+        return IS_NOT_LINE_BP;
+    }
+
+    pc = branch_target(pc);
+
+    const auto expected_target =
+            (const Uint32 *)get_i_line_breakpoint_trampoline_shared();
+
+    /* The call goes through the dispatch table of the module, which in a
+     * very large module is in turn reached through a veneer. Both of them
+     * are either a direct branch, or load their target from a pointer that
+     * follows them (see `emit_veneer`). */
+    for (int hops = 0; hops < 3; hops++) {
+        const Uint32 lnia_super_tmp = 0x4D800004;
+        const Uint32 ld_super_tmp = 0xE98C0000;
+        const Uint32 mtctr_super_tmp = 0x7D8903A6;
+        const Uint32 bctr = 0x4E800420;
+
+        if (pc == expected_target) {
+            return line_bp_type;
+        }
+
+        if ((*pc & branch_mask) == b_opcode) {
+            pc = branch_target(pc);
+        } else if (pc[0] == lnia_super_tmp &&
+                   (pc[1] & 0xFFFF0003) == ld_super_tmp &&
+                   pc[2] == mtctr_super_tmp && pc[3] == bctr) {
+            /* The displacement is relative to the load itself. */
+            auto pointer = (const char *)&pc[1] + (Sint16)(pc[1] & 0xFFFC);
+            const Uint32 *target;
+
+            memcpy(&target, pointer, sizeof(target));
+            pc = target;
+        } else {
+            return IS_NOT_LINE_BP;
+        }
+    }
+
+    return (pc == expected_target) ? line_bp_type : IS_NOT_LINE_BP;
 }
 
 static void i_emit_nyi(const char *msg) {
