@@ -1297,6 +1297,24 @@ protected:
 
     void emit_bs_skip_bits(const ArgLabel &Fail, const ArgRegister &Ctx);
 
+    void emit_read_bits(Uint bits,
+                        const ppc::Gp bin_base,
+                        const ppc::Gp bin_offset,
+                        const ppc::Gp bitdata);
+
+    void emit_reverse_bytes(const ppc::Gp &dst, const ppc::Gp &src, Uint bits);
+
+    void emit_extract_integer(const ppc::Gp &bitdata,
+                              Uint flags,
+                              Uint position,
+                              Uint bits,
+                              const ArgRegister &Dst);
+
+    void emit_extract_bitstring(const ppc::Gp bitdata,
+                                Uint position,
+                                Uint bits,
+                                const ArgRegister &Dst);
+
     void emit_validate(const ArgWord &Arity);
 
     ppc::Mem emit_variable_apply(bool includeI);

@@ -614,3 +614,706 @@ void BeamModuleAssembler::emit_i_bs_get_float2(const ArgRegister &Ctx,
         mov_arg(Dst, ARG1);
     }
 }
+
+/*
+ * Here follows the bs_match instruction and friends.
+ */
+
+/* Reads `bits` bits, starting `bin_offset` bits into the data that `bin_base`
+ * points to, into the most significant bits of `bitdata`. The bits below
+ * them are undefined.
+ *
+ * Only the bytes that the segment spans are read, with the exception that
+ * the byte before a segment of seven bytes may be read too.
+ *
+ * Clobbers LR_TMP, TMP2, TMP4, and TMP5. */
+void BeamModuleAssembler::emit_read_bits(Uint bits,
+                                         const ppc::Gp bin_base,
+                                         const ppc::Gp bin_offset,
+                                         const ppc::Gp bitdata) {
+    Label shift = a.new_label();
+    Label read_done = a.new_label();
+
+    const ppc::Gp bin_byte_ptr = TMP2;
+    const ppc::Gp bit_offset = TMP4;
+    const ppc::Gp tmp = TMP5;
+
+    const int num_partial = bits % 8;
+    const int num_bytes = (bits + 7) / 8;
+
+    ASSERT(1 <= bits && bits <= 64);
+
+    /* Loads `size` bytes as a big-endian number. */
+    auto load_bytes = [&](ppc::Gp to, int offset, int size) {
+        if (size == 1) {
+            a.lbz(to, ppc::Mem(bin_byte_ptr, offset));
+            return;
+        }
+
+#if defined(WORDS_BIGENDIAN)
+        switch (size) {
+        case 2:
+            a.lhz(to, ppc::Mem(bin_byte_ptr, offset));
+            break;
+        case 4:
+            a.lwz(to, ppc::Mem(bin_byte_ptr, offset));
+            break;
+        case 8:
+            load_mem(to, ppc::Mem(bin_byte_ptr, offset));
+            break;
+        }
+#else
+        a.li(LR_TMP, imm(offset));
+        switch (size) {
+        case 2:
+            a.lhbrx(to, ppc::Mem(bin_byte_ptr, LR_TMP));
+            break;
+        case 4:
+            a.lwbrx(to, ppc::Mem(bin_byte_ptr, LR_TMP));
+            break;
+        case 8:
+            a.ldbrx(to, ppc::Mem(bin_byte_ptr, LR_TMP));
+            break;
+        }
+#endif
+    };
+
+    a.srdi(bin_byte_ptr, bin_offset, 3);
+    a.add(bin_byte_ptr, bin_base, bin_byte_ptr);
+
+    /* CR0 tells whether the segment is byte-aligned. None of the
+     * instructions that read the bytes below change it. */
+    a.andi_rc(bit_offset, bin_offset, imm(7));
+
+    /* The segment always spans at least `num_bytes` bytes. Read them into
+     * the most significant bytes of the word. */
+    if (num_bytes == 7) {
+        load_bytes(bitdata, -1, 8);
+        a.sldi(bitdata, bitdata, 8);
+    } else {
+        int num_read = 0;
+
+        for (int size : {8, 4, 2, 1}) {
+            if (num_bytes - num_read < size) {
+                continue;
+            }
+
+            if (num_read == 0) {
+                load_bytes(bitdata, 0, size);
+            } else {
+                load_bytes(tmp, num_read, size);
+                a.sldi(bitdata, bitdata, 8 * size);
+                a.or_(bitdata, bitdata, tmp);
+            }
+
+            num_read += size;
+        }
+
+        if (num_bytes < 8) {
+            a.sldi(bitdata, bitdata, 64 - 8 * num_bytes);
+        }
+    }
+
+    /* An unaligned segment may span one more byte. */
+    if (num_partial == 0) {
+        /* Byte-sized segment. If it is not byte-aligned, it always spans an
+         * additional byte. */
+        a.beq(read_done);
+    } else if (num_partial > 1) {
+        /* Test whether the last bits fit into the bytes already read. */
+        a.cmpdi(bit_offset, imm(8 - num_partial));
+        a.ble(shift);
+    }
+
+    if (num_partial != 1) {
+        a.lbz(tmp, ppc::Mem(bin_byte_ptr, num_bytes));
+
+        if (num_bytes < 8) {
+            /* Place the additional byte right below the bytes already
+             * read. */
+            if (num_bytes < 7) {
+                a.sldi(tmp, tmp, 56 - 8 * num_bytes);
+            }
+            a.or_(bitdata, bitdata, tmp);
+        } else {
+            /* The word is full, so make room for the additional bits by
+             * shifting first. */
+            a.sld(bitdata, bitdata, bit_offset);
+            a.sld(tmp, tmp, bit_offset);
+            a.srdi(tmp, tmp, 8);
+            a.or_(bitdata, bitdata, tmp);
+
+            if (bits == 64) {
+                comment("simplified reading of 64-bit word");
+            } else {
+                a.b(read_done);
+            }
+        }
+    }
+
+    /* Shift the read data into the most significant bits of the
+     * word. */
+    a.bind(shift);
+    if (bits != 64) {
+        a.sld(bitdata, bitdata, bit_offset);
+    }
+
+    a.bind(read_done);
+}
+
+/* Reverses the order of the `bits / 8` least significant bytes in `src`. All
+ * bits above them must be zero.
+ *
+ * There is no instruction that reverses the bytes of a register before
+ * Power ISA 3.1.
+ *
+ * `dst` and `src` must be different registers. Clobbers LR_TMP and TMP4. */
+void BeamModuleAssembler::emit_reverse_bytes(const ppc::Gp &dst,
+                                             const ppc::Gp &src,
+                                             Uint bits) {
+    auto reverse_word = [&](ppc::Gp to, ppc::Gp from) {
+        a.rlwinm(to, from, imm(8), imm(0), imm(31));
+        a.rlwimi(to, from, imm(24), imm(0), imm(7));
+        a.rlwimi(to, from, imm(24), imm(16), imm(23));
+    };
+
+    ASSERT(dst != src && bits % 8 == 0 && 8 <= bits && bits <= 64);
+
+    switch (bits) {
+    case 8:
+        a.mr(dst, src);
+        break;
+    case 16:
+        a.srdi(dst, src, 8);
+        a.rlwimi(dst, src, imm(8), imm(16), imm(23));
+        break;
+    case 24:
+        reverse_word(dst, src);
+        a.srdi(dst, dst, 8);
+        break;
+    case 32:
+        reverse_word(dst, src);
+        break;
+    default:
+        reverse_word(dst, src);
+        a.srdi(TMP4, src, 32);
+        reverse_word(LR_TMP, TMP4);
+        a.sldi(dst, dst, 32);
+        a.or_(dst, dst, LR_TMP);
+        if (bits < 64) {
+            a.srdi(dst, dst, 64 - bits);
+        }
+        break;
+    }
+}
+
+/* Extracts the `bits` bits that start `position` bits above the least
+ * significant bit of `bitdata`.
+ *
+ * Clobbers LR_TMP and TMP1 through TMP5. */
+void BeamModuleAssembler::emit_extract_integer(const ppc::Gp &bitdata,
+                                               Uint flags,
+                                               Uint position,
+                                               Uint bits,
+                                               const ArgRegister &Dst) {
+    ppc::Gp data_reg = bitdata;
+    auto dst = init_destination(Dst, TMP1);
+
+    if (bits <= 8) {
+        /* Endian does not matter for values that fit in a byte. */
+        flags &= ~BSF_LITTLE;
+    }
+
+    const bool is_little = (flags & BSF_LITTLE) != 0;
+    const bool is_signed = (flags & BSF_SIGNED) != 0;
+
+    ERTS_CT_ASSERT(_TAG_IMMED1_SMALL == _TAG_IMMED1_MASK);
+
+    if (bits == 0) {
+        mov_imm(dst.reg, make_small(0));
+        flush_var(dst);
+        return;
+    }
+
+    /* Optimize extraction of big-endian segments that always fit in a
+     * small. The value is moved straight to its place above the tag bits,
+     * and the garbage that ends up in the tag bits is overwritten by the
+     * tag. */
+    if (bits < SMALL_BITS && !is_little) {
+        if (is_signed) {
+            if (position + bits < 64) {
+                a.sldi(dst.reg, bitdata, 64 - position - bits);
+                a.sradi(dst.reg, dst.reg, imm(64 - _TAG_IMMED1_SIZE - bits));
+            } else {
+                a.sradi(dst.reg, bitdata, imm(64 - _TAG_IMMED1_SIZE - bits));
+            }
+        } else {
+            a.rldicl(dst.reg,
+                     bitdata,
+                     imm((64 + _TAG_IMMED1_SIZE - position) & 63),
+                     imm(64 - _TAG_IMMED1_SIZE - bits));
+        }
+
+        a.ori(dst.reg, dst.reg, imm(_TAG_IMMED1_SMALL));
+        flush_var(dst);
+        return;
+    }
+
+    Label big = a.new_label();
+    Label done = a.new_label();
+    Uint num_partial = bits % 8;
+    Uint num_complete = 8 * (bits / 8);
+
+    if (bits < 64) {
+        if (is_signed && !is_little) {
+            data_reg = TMP2;
+            if (position + bits < 64) {
+                a.sldi(data_reg, bitdata, 64 - position - bits);
+                a.sradi(data_reg, data_reg, imm(64 - bits));
+            } else {
+                a.sradi(data_reg, bitdata, imm(64 - bits));
+            }
+        } else {
+            /* The bytes cannot be reversed in place, so extract a
+             * little-endian segment to another register. */
+            data_reg = is_little ? TMP3 : TMP2;
+            a.rldicl(data_reg,
+                     bitdata,
+                     imm((64 - position) & 63),
+                     imm(64 - bits));
+        }
+    }
+
+    /* If this segment is little-endian, reverse endianness. */
+    if (is_little) {
+        comment("reverse endian for a little-endian segment");
+        if (num_partial == 0) {
+            emit_reverse_bytes(TMP2, data_reg, bits);
+        } else {
+            /* The partial byte holds the most significant bits. */
+            a.rldic(TMP5,
+                    data_reg,
+                    imm(num_complete),
+                    imm(64 - num_complete - num_partial));
+            a.rldicl(TMP3,
+                     data_reg,
+                     imm(64 - num_partial),
+                     imm(64 - num_complete));
+            emit_reverse_bytes(TMP2, TMP3, num_complete);
+            a.or_(TMP2, TMP2, TMP5);
+        }
+        data_reg = TMP2;
+
+        /* Sign-extend the number if the segment is signed. */
+        if (is_signed && bits < 64) {
+            comment("sign extend extracted value");
+            if (bits == 16) {
+                a.extsh(TMP2, TMP2);
+            } else if (bits == 32) {
+                a.extsw(TMP2, TMP2);
+            } else {
+                a.sldi(TMP2, TMP2, 64 - bits);
+                a.sradi(TMP2, TMP2, imm(64 - bits));
+            }
+        }
+    }
+
+    /* Handle segments whose values might not fit in a small integer. */
+    if (bits >= SMALL_BITS) {
+        comment("test whether it fits in a small");
+        if (is_signed) {
+            /* Signed segment. It fits if the bits above the value are all
+             * equal to its sign bit, that is, if they are 0 or -1. */
+            a.sradi(TMP3, data_reg, imm(SMALL_BITS - 1));
+            a.addi(TMP3, TMP3, imm(1));
+            a.cmpldi(TMP3, imm(1));
+            a.bgt(big);
+        } else {
+            /* Unsigned segment. */
+            a.rldicl_rc(TMP3,
+                        data_reg,
+                        imm(64 - (SMALL_BITS - 1)),
+                        imm(SMALL_BITS - 1));
+            a.bne(big);
+        }
+    }
+
+    /* Tag and store the extracted small integer. */
+    a.sldi(dst.reg, data_reg, _TAG_IMMED1_SIZE);
+    a.ori(dst.reg, dst.reg, imm(_TAG_IMMED1_SMALL));
+
+    if (bits >= SMALL_BITS) {
+        a.b(done);
+    }
+
+    /* Handle a bignum (up to 64 bits). */
+    a.bind(big);
+    if (bits >= SMALL_BITS) {
+        comment("store extracted integer as a bignum");
+        a.addi(dst.reg, HTOP, imm(TAG_PRIMARY_BOXED));
+        mov_imm(TMP3, make_pos_bignum_header(1));
+        if (is_signed) {
+            Label store = a.new_label();
+
+            if (data_reg != TMP2) {
+                a.mr(TMP2, data_reg);
+                data_reg = TMP2;
+            }
+            a.cmpdi(TMP2, imm(0));
+            a.bge(store);
+
+            mov_imm(TMP3, make_neg_bignum_header(1));
+            a.neg(TMP2, TMP2);
+
+            a.bind(store);
+        }
+
+        a.std(TMP3, ppc::Mem(HTOP, 0));
+        a.std(data_reg, ppc::Mem(HTOP, sizeof(Eterm)));
+        a.addi(HTOP, HTOP, imm(sizeof(Eterm[2])));
+    }
+
+    a.bind(done);
+    flush_var(dst);
+}
+
+/* Extracts the `bits` bits right below the bit that is `position` bits
+ * above the least significant bit of `bitdata`.
+ *
+ * Clobbers LR_TMP and TMP1 through TMP4. */
+void BeamModuleAssembler::emit_extract_bitstring(const ppc::Gp bitdata,
+                                                 Uint position,
+                                                 Uint bits,
+                                                 const ArgRegister &Dst) {
+    auto dst = init_destination(Dst, TMP1);
+
+    a.addi(dst.reg, HTOP, imm(TAG_PRIMARY_BOXED));
+    mov_imm(TMP2, header_heap_bits(bits));
+    mov_imm(TMP3, bits);
+    a.std(TMP2, ppc::Mem(HTOP, 0));
+    a.std(TMP3, ppc::Mem(HTOP, sizeof(Eterm)));
+
+    if (bits > 0) {
+        ppc::Gp data_reg = bitdata;
+
+        /* Move the bits to the most significant bits of the word. */
+        if (position != 64) {
+            data_reg = TMP4;
+            a.rotldi(data_reg, bitdata, 64 - position);
+        }
+
+        /* The first bit of the bitstring is the most significant bit of
+         * its first byte. */
+#if defined(WORDS_BIGENDIAN)
+        a.std(data_reg, ppc::Mem(HTOP, sizeof(Eterm[2])));
+#else
+        a.li(LR_TMP, imm(sizeof(Eterm[2])));
+        a.stdbrx(data_reg, ppc::Mem(HTOP, LR_TMP));
+#endif
+        a.addi(HTOP, HTOP, imm(sizeof(Eterm[3])));
+    } else {
+        a.addi(HTOP, HTOP, imm(sizeof(Eterm[2])));
+    }
+
+    flush_var(dst);
+}
+
+void BeamModuleAssembler::emit_i_bs_match(ArgLabel const &Fail,
+                                          ArgRegister const &Ctx,
+                                          Span<const ArgVal> const &List) {
+    emit_i_bs_match_test_heap(Fail, Ctx, ArgWord(0), ArgWord(0), List);
+}
+
+void BeamModuleAssembler::emit_i_bs_match_test_heap(
+        ArgLabel const &Fail,
+        ArgRegister const &Ctx,
+        ArgWord const &Need,
+        ArgWord const &Live,
+        Span<const ArgVal> const &List) {
+    const int orig_offset = offsetof(ErlSubBits, orig);
+    const int base_offset = offsetof(ErlSubBits, base_flags);
+    const int start_offset = offsetof(ErlSubBits, start);
+    const int end_offset = offsetof(ErlSubBits, end);
+
+    std::vector<BsmSegment> segments;
+
+    segments = beam_jit_bsm_init(beam, List);
+    segments = beam_jit_opt_bsm_segments(segments, Need, Live);
+
+    /* The match context is untagged into this register before its fields
+     * are accessed, as the displacement of a 64-bit load or store must be a
+     * multiple of four. */
+    const ppc::Gp ctx_ptr = TMP1;
+    const ppc::Gp bin_base = ARG2;
+    const ppc::Gp bin_position = ARG3;
+    const ppc::Gp bin_size = ARG4;
+    const ppc::Gp bitdata = ARG8;
+    bool position_is_valid = false;
+    Uint offset_in_bitdata = 0;
+
+    ERTS_CT_ASSERT(ERL_SUB_BITS_FLAG_MASK == 3 && TAG_PTR_MASK__ == 7);
+
+    for (auto seg : segments) {
+        switch (seg.action) {
+        case BsmSegment::action::ENSURE_AT_LEAST: {
+            comment("ensure_at_least %ld %ld", seg.size, seg.unit);
+            auto ctx_reg = load_source(Ctx, TMP1);
+            auto stride = seg.size;
+            auto unit = seg.unit;
+
+            emit_untag_ptr(ctx_ptr, ctx_reg.reg);
+            a.ld(bin_position, ppc::Mem(ctx_ptr, start_offset));
+            a.ld(bin_size, ppc::Mem(ctx_ptr, end_offset));
+            a.sub(TMP5, bin_size, bin_position);
+            if (stride != 0) {
+                cmpl(TMP5, stride);
+                a.blt(resolve_beam_label(Fail, disp32K));
+            }
+
+            if (unit != 1) {
+                if (stride % unit != 0) {
+                    sub(TMP5, TMP5, stride);
+                }
+
+                if ((unit & (unit - 1)) != 0) {
+                    mov_imm(TMP4, unit);
+
+                    a.divdu(TMP3, TMP5, TMP4);
+                    a.mulld(TMP3, TMP3, TMP4);
+
+                    a.cmpd(TMP5, TMP3);
+                    a.bne(resolve_beam_label(Fail, disp32K));
+                } else {
+                    a.rldicl_rc(LR_TMP,
+                                TMP5,
+                                imm(0),
+                                imm(64 - Support::ctz<Eterm>(unit)));
+                    a.bne(resolve_beam_label(Fail, disp32K));
+                }
+            }
+
+            position_is_valid = true;
+            break;
+        }
+        case BsmSegment::action::ENSURE_EXACTLY: {
+            comment("ensure_exactly %ld", seg.size);
+            auto ctx_reg = load_source(Ctx, TMP1);
+            auto size = seg.size;
+
+            emit_untag_ptr(ctx_ptr, ctx_reg.reg);
+            a.ld(bin_position, ppc::Mem(ctx_ptr, start_offset));
+            a.ld(TMP3, ppc::Mem(ctx_ptr, end_offset));
+            a.sub(TMP3, TMP3, bin_position);
+            cmpl(TMP3, size);
+            a.bne(resolve_beam_label(Fail, disp32K));
+            position_is_valid = true;
+            break;
+        }
+        case BsmSegment::action::EQ: {
+            ppc::Gp cmp_reg = TMP1;
+            Uint value = seg.unit;
+            comment("=:= %ld %ld", seg.size, seg.unit);
+
+            offset_in_bitdata -= seg.size;
+
+            if (seg.size == 0) {
+                mov_imm(cmp_reg, 0);
+            } else if (seg.size == 64) {
+                cmp_reg = bitdata;
+            } else {
+                a.rldicl(cmp_reg,
+                         bitdata,
+                         imm((64 - offset_in_bitdata) & 63),
+                         imm(64 - seg.size));
+            }
+
+            if (seg.size == 32) {
+                /* The extracted value is zero-extended. */
+                value &= 0xFFFFFFFFUL;
+            }
+
+            cmpl(cmp_reg, value);
+            a.bne(resolve_beam_label(Fail, disp32K));
+            break;
+        }
+        case BsmSegment::action::TEST_HEAP: {
+            comment("test_heap %ld", seg.size);
+            emit_gc_test(ArgWord(0), ArgWord(seg.size), seg.live);
+            position_is_valid = false;
+            break;
+        }
+        case BsmSegment::action::READ: {
+            comment("read %ld", seg.size);
+            offset_in_bitdata = 64;
+            if (seg.size == 0) {
+                comment("(nothing to do)");
+            } else {
+                auto ctx = load_source(Ctx, TMP1);
+
+                emit_untag_ptr(ctx_ptr, ctx.reg);
+
+                if (!position_is_valid) {
+                    a.ld(bin_position, ppc::Mem(ctx_ptr, start_offset));
+                    position_is_valid = true;
+                }
+
+                a.ld(bin_base, ppc::Mem(ctx_ptr, base_offset));
+                a.clrrdi(bin_base, bin_base, 2);
+
+                emit_read_bits(seg.size, bin_base, bin_position, bitdata);
+
+                a.addi(bin_position, bin_position, imm(seg.size));
+                a.std(bin_position, ppc::Mem(ctx_ptr, start_offset));
+            }
+            break;
+        }
+        case BsmSegment::action::EXTRACT_BITSTRING: {
+            auto bits = seg.size;
+            auto Dst = seg.dst;
+
+            comment("extract binary %ld", bits);
+            emit_extract_bitstring(bitdata, offset_in_bitdata, bits, Dst);
+            offset_in_bitdata -= bits;
+            break;
+        }
+        case BsmSegment::action::EXTRACT_INTEGER: {
+            auto bits = seg.size;
+            auto flags = seg.flags;
+            auto Dst = seg.dst;
+
+            comment("extract integer %ld", bits);
+            offset_in_bitdata -= bits;
+            emit_extract_integer(bitdata, flags, offset_in_bitdata, bits, Dst);
+            break;
+        }
+        case BsmSegment::action::READ_INTEGER: {
+            auto bits = seg.size;
+            auto flags = seg.flags;
+            auto Dst = seg.dst;
+
+            comment("read integer %ld", seg.size);
+            if (seg.size == 0) {
+                comment("(nothing to read)");
+            } else {
+                auto ctx = load_source(Ctx, TMP1);
+
+                emit_untag_ptr(ctx_ptr, ctx.reg);
+
+                if (!position_is_valid) {
+                    a.ld(bin_position, ppc::Mem(ctx_ptr, start_offset));
+                    position_is_valid = true;
+                }
+
+                a.ld(bin_base, ppc::Mem(ctx_ptr, base_offset));
+                a.clrrdi(bin_base, bin_base, 2);
+
+                emit_read_bits(seg.size, bin_base, bin_position, bitdata);
+
+                a.addi(bin_position, bin_position, imm(seg.size));
+                a.std(bin_position, ppc::Mem(ctx_ptr, start_offset));
+            }
+
+            offset_in_bitdata = 64 - bits;
+            emit_extract_integer(bitdata, flags, offset_in_bitdata, bits, Dst);
+            break;
+        }
+        case BsmSegment::action::GET_INTEGER: {
+            /* Match integer segments with more than 64 bits. */
+            Uint live = seg.live.as<ArgWord>().get();
+            Uint flags = seg.flags;
+            auto bits = seg.size;
+            auto Dst = seg.dst;
+
+            comment("get integer %ld", bits);
+            auto ctx = load_source(Ctx, TMP1);
+
+            a.mr(ARG1, c_p);
+            mov_imm(ARG2, bits);
+            mov_imm(ARG3, flags);
+            emit_untag_ptr(ARG4, ctx.reg);
+
+            emit_enter_runtime<Update::eHeapOnlyAlloc>(live);
+            runtime_call<Eterm (*)(Process *, Uint, unsigned, ErlSubBits *),
+                         erts_bs_get_integer_2>();
+            emit_leave_runtime<Update::eHeapOnlyAlloc>(live);
+
+            mov_arg(Dst, ARG1);
+
+            position_is_valid = false;
+            break;
+        }
+        case BsmSegment::action::GET_BITSTRING: {
+            auto Live = seg.live;
+            ERTS_ASSERT(seg.size > 64);
+            comment("get binary %ld", seg.size);
+            auto ctx = load_source(Ctx, TMP1);
+
+            emit_untag_ptr(ctx_ptr, ctx.reg);
+            a.ld(ARG5, ppc::Mem(ctx_ptr, start_offset));
+
+            lea(ARG1, ppc::Mem(c_p, offsetof(Process, htop)));
+            if (seg.size <= ERL_ONHEAP_BITS_LIMIT) {
+                comment("skipped setting registers not used for heap binary");
+            } else {
+                a.ld(ARG2, ppc::Mem(ctx_ptr, orig_offset));
+                a.clrrdi(ARG3, ARG2, 3);
+                a.clrldi(ARG2, ARG2, 61);
+            }
+            a.ld(ARG4, ppc::Mem(ctx_ptr, base_offset));
+            a.clrrdi(ARG4, ARG4, 2);
+            mov_imm(ARG6, seg.size);
+            a.add(TMP2, ARG5, ARG6);
+            a.std(TMP2, ppc::Mem(ctx_ptr, start_offset));
+
+            emit_enter_runtime<Update::eHeapOnlyAlloc>(
+                    Live.as<ArgWord>().get());
+
+            runtime_call<Eterm (*)(Eterm **,
+                                   Eterm,
+                                   const BinRef *,
+                                   const byte *,
+                                   Uint,
+                                   Uint),
+                         erts_build_sub_bitstring>();
+
+            emit_leave_runtime<Update::eHeapOnlyAlloc>(
+                    Live.as<ArgWord>().get());
+
+            mov_arg(seg.dst, ARG1);
+            position_is_valid = false;
+            break;
+        }
+        case BsmSegment::action::GET_TAIL: {
+            comment("get_tail");
+
+            mov_arg(ARG1, Ctx);
+            fragment_call(ga->get_bs_get_tail_shared());
+            mov_arg(seg.dst, ARG1);
+            position_is_valid = false;
+            break;
+        }
+        case BsmSegment::action::SKIP: {
+            comment("skip %ld", seg.size);
+            auto ctx = load_source(Ctx, TMP1);
+
+            emit_untag_ptr(ctx_ptr, ctx.reg);
+            if (!position_is_valid) {
+                a.ld(bin_position, ppc::Mem(ctx_ptr, start_offset));
+                position_is_valid = true;
+            }
+            add(bin_position, bin_position, seg.size);
+            a.std(bin_position, ppc::Mem(ctx_ptr, start_offset));
+            break;
+        }
+        case BsmSegment::action::DROP:
+            auto bits = seg.size;
+            comment("drop %ld", bits);
+            offset_in_bitdata -= bits;
+            break;
+        }
+
+        /* A match with many segments can be long enough for the labels of
+         * earlier instructions to go out of range. */
+        check_pending_stubs();
+    }
+}

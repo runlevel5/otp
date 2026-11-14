@@ -443,21 +443,6 @@ void BeamModuleAssembler::emit_i_bs_get_utf8(const ArgRegister &,
     emit_nyi("i_bs_get_utf8");
 }
 
-void BeamModuleAssembler::emit_i_bs_match(const ArgLabel &,
-                                          const ArgRegister &,
-                                          const Span<const ArgVal> &) {
-    emit_nyi("i_bs_match");
-}
-
-void BeamModuleAssembler::emit_i_bs_match_test_heap(
-        const ArgLabel &,
-        const ArgRegister &,
-        const ArgWord &,
-        const ArgWord &,
-        const Span<const ArgVal> &) {
-    emit_nyi("i_bs_match_test_heap");
-}
-
 void BeamModuleAssembler::emit_i_bs_skip_utf16(const ArgRegister &,
                                                const ArgLabel &,
                                                const ArgWord &) {
