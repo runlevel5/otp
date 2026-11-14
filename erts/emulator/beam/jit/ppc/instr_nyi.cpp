@@ -46,10 +46,6 @@ void BeamGlobalAssembler::emit_nyi(const char *msg) {
  * Shared fragments.
  */
 
-void BeamGlobalAssembler::emit_bs_create_bin_error_shared() {
-    emit_nyi("bs_create_bin_error_shared");
-}
-
 void BeamGlobalAssembler::emit_bs_get_utf8_shared() {
     emit_nyi("bs_get_utf8_shared");
 }
@@ -58,16 +54,8 @@ void BeamGlobalAssembler::emit_bs_get_utf8_short_shared() {
     emit_nyi("bs_get_utf8_short_shared");
 }
 
-void BeamGlobalAssembler::emit_bs_init_bits_shared() {
-    emit_nyi("bs_init_bits_shared");
-}
-
 void BeamGlobalAssembler::emit_check_float_error() {
     emit_nyi("check_float_error");
-}
-
-void BeamGlobalAssembler::emit_construct_utf8_shared() {
-    emit_nyi("construct_utf8_shared");
 }
 
 void BeamGlobalAssembler::emit_create_native_record_shared() {
@@ -76,10 +64,6 @@ void BeamGlobalAssembler::emit_create_native_record_shared() {
 
 void BeamGlobalAssembler::emit_fconv_shared() {
     emit_nyi("fconv_shared");
-}
-
-void BeamGlobalAssembler::emit_get_sint64_shared() {
-    emit_nyi("get_sint64_shared");
 }
 
 void BeamGlobalAssembler::emit_i_func_info_shared() {
@@ -94,17 +78,9 @@ void BeamGlobalAssembler::emit_int_div_rem_guard_shared() {
     emit_nyi("int_div_rem_guard_shared");
 }
 
-void BeamGlobalAssembler::emit_store_unaligned() {
-    emit_nyi("store_unaligned");
-}
-
 /*
  * Instructions.
  */
-
-void BeamModuleAssembler::emit_bs_init_writable() {
-    emit_nyi("bs_init_writable");
-}
 
 void BeamModuleAssembler::emit_fconv(const ArgSource &, const ArgFRegister &) {
     emit_nyi("fconv");

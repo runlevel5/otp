@@ -615,6 +615,558 @@ void BeamModuleAssembler::emit_i_bs_get_float2(const ArgRegister &Ctx,
     }
 }
 
+void BeamModuleAssembler::emit_bs_init_writable() {
+    ERTS_CT_ASSERT(ERTS_HIGHEST_CALLEE_SAVE_XREG >= 0);
+
+    a.mr(ARG1, c_p);
+    a.mr(ARG2, XREG0);
+
+    /* We have an implicit liveness of 0, so we don't need to stash X
+     * registers. */
+    emit_enter_runtime<Update::eReductions | Update::eHeapAlloc>(0);
+
+    runtime_call<Eterm (*)(Process *, Eterm), erts_bs_init_writable>();
+
+    emit_leave_runtime<Update::eReductions | Update::eHeapAlloc>(0);
+
+    a.mr(XREG0, ARG1);
+}
+
+void BeamGlobalAssembler::emit_bs_create_bin_error_shared() {
+    a.mflr(XREG0);
+
+    emit_enter_runtime<Update::eHeapAlloc>(0);
+
+    /* ARG3 is already set by the caller */
+    a.mr(ARG2, ARG4);
+    a.mr(ARG4, ARG1);
+    a.mr(ARG1, c_p);
+    runtime_call<void (*)(Process *, Uint, Eterm, Eterm),
+                 beam_jit_bs_construct_fail_info>();
+
+    emit_leave_runtime<Update::eHeapAlloc>(0);
+
+    mov_imm(ARG4, 0);
+    a.mr(ARG2, XREG0);
+    a.b(labels[raise_exception_shared]);
+}
+
+/*
+ * ARG1 = tagged bignum term
+ *
+ * On success, the least significant 64 bits are returned in ARG1 and
+ * the EQ bit of CR0 is cleared. If ARG1 is not a bignum, the EQ bit of
+ * CR0 is set.
+ */
+void BeamGlobalAssembler::emit_get_sint64_shared() {
+    Label success = a.new_label();
+    Label fail = a.new_label();
+
+    emit_is_boxed(fail, ARG1);
+    ppc::Gp boxed_ptr = emit_ptr_val(TMP3, ARG1);
+    load_mem(TMP1, emit_boxed_val(boxed_ptr));
+    load_mem(TMP2, emit_boxed_val(boxed_ptr, sizeof(Eterm)));
+    a.andi_rc(TMP1, TMP1, imm(_TAG_HEADER_MASK));
+    a.cmpdi(TMP1, imm(POS_BIG_SUBTAG));
+    a.beq(success);
+
+    a.cmpdi(TMP1, imm(NEG_BIG_SUBTAG));
+    a.bne(fail);
+
+    a.neg(TMP2, TMP2);
+
+    a.bind(success);
+    {
+        a.mr(ARG1, TMP2);
+        /* Clear the EQ bit.
+         *
+         * TMP1 is known to be POS_BIG_SUBTAG or NEG_BIG_SUBTAG at this point.
+         */
+        ERTS_CT_ASSERT(POS_BIG_SUBTAG != 0 && NEG_BIG_SUBTAG != 0);
+        a.cmpdi(TMP1, imm(0));
+        a.blr();
+    }
+
+    a.bind(fail);
+    {
+        a.cmpd(ARG1, ARG1);
+        a.blr();
+    }
+}
+
+/*
+ * In:
+ *    bin_offset = register to store the bit offset into the binary
+ *    bit_offset = current bit offset into binary, or -1 if unknown
+ *    size = size of segment to be constructed
+ *           (ignored if size_reg is valid register)
+ *    size_reg = if a valid register, it contains the size of
+ *               the segment to be constructed
+ *
+ * Out:
+ *    bin_offset register = if bit_offset is not byte aligned, the bit
+ *          offset into the binary
+ *    TMP1 = pointer to the current byte in the binary
+ *
+ *    Preserves all other ARG* registers.
+ */
+void BeamModuleAssembler::update_bin_state(ppc::Gp bin_offset,
+                                           Sint bit_offset,
+                                           Sint size,
+                                           ppc::Gp size_reg) {
+    int cur_bin_offset = offsetof(ErtsSchedulerRegisters,
+                                  aux_regs.d.erl_bits_state.erts_current_bin);
+    ppc::Mem mem_bin_base = ppc::Mem(scheduler_registers, cur_bin_offset);
+    ppc::Mem mem_bin_offset =
+            ppc::Mem(scheduler_registers,
+                     offsetof(ErtsSchedulerRegisters,
+                              aux_regs.d.erl_bits_state.erts_bin_offset));
+
+    if (bit_offset % 8 != 0) {
+        /* The bit offset is unknown or not byte-aligned. */
+        load_mem(TMP2, mem_bin_base);
+        load_mem(bin_offset, mem_bin_offset);
+
+        if (size_reg.is_valid()) {
+            a.add(TMP1, bin_offset, size_reg);
+        } else {
+            add(TMP1, bin_offset, size);
+        }
+        store_mem(TMP1, mem_bin_offset);
+
+        a.srdi(TMP1, bin_offset, 3);
+        a.add(TMP1, TMP2, TMP1);
+    } else {
+        comment("optimized updating of binary construction state");
+        ASSERT(size >= 0 || size_reg.is_valid());
+        ASSERT(bit_offset % 8 == 0);
+        load_mem(TMP1, mem_bin_base);
+        if (size_reg.is_valid()) {
+            if (bit_offset == 0) {
+                store_mem(size_reg, mem_bin_offset);
+            } else {
+                add(TMP2, size_reg, bit_offset);
+                store_mem(TMP2, mem_bin_offset);
+            }
+        } else {
+            mov_imm(TMP2, bit_offset + size);
+            store_mem(TMP2, mem_bin_offset);
+        }
+        if (bit_offset != 0) {
+            add(TMP1, TMP1, bit_offset >> 3);
+        }
+    }
+}
+
+/*
+ * The size of the segment is assumed to be in ARG3.
+ */
+void BeamModuleAssembler::set_zero(Sint effectiveSize) {
+    Label store_units = a.new_label();
+    Label less_than_a_store_unit = a.new_label();
+    Sint store_unit = 1;
+    const ppc::Gp zero = LR_TMP;
+
+    update_bin_state(ARG2, -1, -1, ARG3);
+
+    a.li(zero, imm(0));
+
+    if (effectiveSize >= 256) {
+        /* Store four 64-bit words machine words when the size is
+         * known and at least 256 bits. */
+        store_unit = 4;
+    } else if (effectiveSize >= 128) {
+        /* Store two 64-bit words machine words when the size is
+         * known and at least 128 bits. */
+        store_unit = 2;
+    }
+
+    if (effectiveSize < Sint(store_unit * 8 * sizeof(Eterm))) {
+        /* The size is either not known or smaller than a word. */
+        a.cmpdi(ARG3, imm(store_unit * 8 * sizeof(Eterm)));
+        a.blt(less_than_a_store_unit);
+    }
+
+    a.bind(store_units);
+    for (Sint i = 0; i < store_unit; i++) {
+        a.std(zero, ppc::Mem(TMP1, i * sizeof(Eterm)));
+    }
+    a.addi(TMP1, TMP1, imm(store_unit * sizeof(Eterm)));
+    a.addi(ARG3, ARG3, imm(-(store_unit * 8 * (Sint)sizeof(Eterm))));
+
+    a.cmpdi(ARG3, imm(store_unit * 8 * sizeof(Eterm)));
+    a.bge(store_units);
+
+    a.bind(less_than_a_store_unit);
+    if (effectiveSize < 0) {
+        /* Unknown size. */
+        Label byte_loop = a.new_label();
+        Label done = a.new_label();
+
+        ASSERT(store_unit == 1);
+
+        a.cmpdi(ARG3, imm(0));
+        a.beq(done);
+
+        a.bind(byte_loop);
+        a.stb(zero, ppc::Mem(TMP1));
+        a.addi(TMP1, TMP1, imm(1));
+        a.addi(ARG3, ARG3, imm(-8));
+        a.cmpdi(ARG3, imm(0));
+        a.bgt(byte_loop);
+
+        a.bind(done);
+    } else if (effectiveSize % (store_unit * 8 * sizeof(Eterm)) != 0) {
+        /* The size is known, and we know that there are less than
+         * 256 bits to initialize. */
+        int offset = 0;
+
+        if (store_unit == 4 && (effectiveSize & 255) >= 128) {
+            a.std(zero, ppc::Mem(TMP1, offset));
+            a.std(zero, ppc::Mem(TMP1, offset + 8));
+            offset += 16;
+        }
+
+        if ((effectiveSize & 127) >= 64) {
+            a.std(zero, ppc::Mem(TMP1, offset));
+            offset += 8;
+        }
+
+        if ((effectiveSize & 63) >= 32) {
+            a.stw(zero, ppc::Mem(TMP1, offset));
+            offset += 4;
+        }
+
+        if ((effectiveSize & 31) >= 16) {
+            a.sth(zero, ppc::Mem(TMP1, offset));
+            offset += 2;
+        }
+
+        if ((effectiveSize & 15) >= 8) {
+            a.stb(zero, ppc::Mem(TMP1, offset));
+            offset += 1;
+        }
+
+        if ((effectiveSize & 7) > 0) {
+            a.stb(zero, ppc::Mem(TMP1, offset));
+        }
+    }
+}
+
+/*
+ * Stores bytes [first_byte, first_byte + num_bytes) of the segment data
+ * at the same offsets from `base`.
+ *
+ * Big-endian data is a stream of bits that starts at the most significant
+ * bit of `data`. Little-endian data is right-aligned in `data` and stored
+ * with its least significant byte first.
+ *
+ * Clobbers TMP2 and LR_TMP.
+ */
+void BeamModuleAssembler::emit_store_bytes(ppc::Gp data,
+                                           bool big_endian,
+                                           ppc::Gp base,
+                                           int first_byte,
+                                           int num_bytes) {
+#if defined(WORDS_BIGENDIAN)
+    const bool is_native = big_endian;
+#else
+    const bool is_native = !big_endian;
+#endif
+    int index = first_byte;
+    int left = num_bytes;
+
+    ASSERT(base != LR_TMP && base != TMP2);
+
+    while (left > 0) {
+        int chunk = left >= 8 ? 8 : left >= 4 ? 4 : left >= 2 ? 2 : 1;
+        int shift = big_endian ? 64 - 8 * (index + chunk) : 8 * index;
+        ppc::Gp value = data;
+
+        ASSERT(0 <= shift && shift < 64);
+        if (shift != 0) {
+            a.srdi(TMP2, data, shift);
+            value = TMP2;
+        }
+
+        if (chunk == 1) {
+            a.stb(value, ppc::Mem(base, index));
+        } else if (is_native) {
+            switch (chunk) {
+            case 2:
+                a.sth(value, ppc::Mem(base, index));
+                break;
+            case 4:
+                a.stw(value, ppc::Mem(base, index));
+                break;
+            case 8:
+                store_mem(value, ppc::Mem(base, index));
+                break;
+            }
+        } else {
+            mov_imm(LR_TMP, index);
+            switch (chunk) {
+            case 2:
+                a.sthbrx(value, ppc::Mem(base, LR_TMP));
+                break;
+            case 4:
+                a.stwbrx(value, ppc::Mem(base, LR_TMP));
+                break;
+            case 8:
+                a.stdbrx(value, ppc::Mem(base, LR_TMP));
+                break;
+            }
+        }
+
+        index += chunk;
+        left -= chunk;
+    }
+}
+
+/*
+ * In:
+ *
+ *   ARG1 = valid unicode code point (=> 0x80) to encode
+ *
+ * Out:
+ *
+ *   ARG1 = the code point encoded in UTF-8, right-aligned with the
+ *          first byte being the most significant one.
+ *   ARG4 = number of bits of result (16, 24, or 32)
+ *
+ *   Preserves other ARG* registers, clobbers TMP* registers
+ */
+void BeamGlobalAssembler::emit_construct_utf8_shared() {
+    Label more_than_two_bytes = a.new_label();
+    Label four_bytes = a.new_label();
+    const ppc::Gp value = ARG1;
+    const ppc::Gp num_bits = ARG4;
+
+    a.cmpldi(value, imm(0x800));
+    a.bge(more_than_two_bytes);
+
+    /* Encode Unicode code point in two bytes. */
+    a.rldicr(TMP1, value, imm(2), imm(55));
+    a.clrldi(TMP2, value, 58);
+    a.or_(TMP1, TMP1, TMP2);
+    mov_imm(num_bits, 16);
+    a.ori(value, TMP1, imm(0xc080));
+    a.blr();
+
+    /* Test whether the value should be encoded in four bytes. */
+    a.bind(more_than_two_bytes);
+    a.srdi(TMP1, value, 16);
+    a.cmpdi(TMP1, imm(0));
+    a.bne(four_bytes);
+
+    /* Encode Unicode code point in three bytes. */
+    a.rldicr(TMP1, value, imm(4), imm(47));
+    a.rlwinm(TMP2, value, imm(2), imm(18), imm(23));
+    a.clrldi(TMP3, value, 58);
+    a.or_(TMP1, TMP1, TMP2);
+    a.or_(TMP1, TMP1, TMP3);
+    mov_imm(num_bits, 24);
+    a.oris(TMP1, TMP1, imm(0xe0));
+    a.ori(value, TMP1, imm(0x8080));
+    a.blr();
+
+    /* Encode Unicode code point in four bytes. */
+    a.bind(four_bytes);
+    a.rlwinm(TMP1, value, imm(6), imm(5), imm(7));
+    a.rlwinm(TMP2, value, imm(4), imm(10), imm(15));
+    a.rlwinm(TMP3, value, imm(2), imm(18), imm(23));
+    a.clrldi(value, value, 58);
+    a.or_(TMP1, TMP1, TMP2);
+    a.or_(TMP3, TMP3, value);
+    a.or_(TMP1, TMP1, TMP3);
+    mov_imm(num_bits, 32);
+    a.oris(TMP1, TMP1, imm(0xf080));
+    a.ori(value, TMP1, imm(0x8080));
+    a.blr();
+}
+
+void BeamModuleAssembler::emit_construct_utf8(const ArgVal &Src,
+                                              Sint bit_offset,
+                                              bool is_byte_aligned) {
+    Label prepare_store = a.new_label();
+    Label store = a.new_label();
+    Label next = a.new_label();
+
+    comment("construct utf8 segment");
+    auto src = load_source(Src, ARG1);
+
+    a.srdi(ARG1, src.reg, _TAG_IMMED1_SIZE);
+    mov_imm(ARG4, 8);
+    a.cmpldi(ARG1, imm(0x80));
+    a.blt(prepare_store);
+
+    fragment_call(ga->get_construct_utf8_shared());
+
+    a.bind(prepare_store);
+    ppc::Gp bin_offset = ARG3;
+    update_bin_state(bin_offset, bit_offset, -1, ARG4);
+
+    /* Turn the encoded code point into a stream of bits that starts
+     * at the most significant bit of ARG1. */
+    a.subfic(TMP3, ARG4, imm(64));
+    a.sld(ARG1, ARG1, TMP3);
+
+    if (!is_byte_aligned) {
+        /* Not known to be byte-aligned. Must test alignment. */
+        a.andi_rc(TMP2, bin_offset, imm(7));
+        a.beq(store);
+
+        /* We must combine the last partial byte with the UTF-8
+         * encoded code point. */
+        a.lbz(TMP5, ppc::Mem(TMP1));
+
+        a.srd(ARG1, ARG1, TMP2);
+
+        a.sld(TMP5, TMP5, TMP2);
+        a.clrrdi(TMP5, TMP5, 8);
+        a.srd(TMP5, TMP5, TMP2);
+        a.sldi(TMP5, TMP5, 56);
+
+        a.or_(ARG1, ARG1, TMP5);
+
+        a.addi(ARG4, ARG4, imm(8));
+    }
+
+    a.bind(store);
+    if (bit_offset % (4 * 8) == 0) {
+        /* This segment is aligned on a 4-byte boundary. This implies
+         * that a 4-byte write will be inside the allocated binary. */
+        emit_store_bytes(ARG1, true, TMP1, 0, 4);
+    } else {
+        Label do_store_1 = a.new_label();
+        Label do_store_2 = a.new_label();
+
+        /* Unsuitable or unknown alignment. We must be careful not
+         * to write beyound the allocated end of the binary. */
+        a.cmpdi(ARG4, imm(8));
+        a.bne(do_store_1);
+
+        emit_store_bytes(ARG1, true, TMP1, 0, 1);
+        a.b(next);
+
+        a.bind(do_store_1);
+        a.cmpdi(ARG4, imm(24));
+        a.bgt(do_store_2);
+
+        emit_store_bytes(ARG1, true, TMP1, 0, 2);
+        a.cmpdi(ARG4, imm(16));
+        a.beq(next);
+
+        emit_store_bytes(ARG1, true, TMP1, 2, 1);
+        a.b(next);
+
+        a.bind(do_store_2);
+        emit_store_bytes(ARG1, true, TMP1, 0, 4);
+
+        if (!is_byte_aligned) {
+            a.cmpdi(ARG4, imm(32));
+            a.beq(next);
+
+            emit_store_bytes(ARG1, true, TMP1, 4, 1);
+        }
+    }
+
+    a.bind(next);
+}
+
+/*
+ * In:
+ *   TMP1 = pointer to current byte
+ *   ARG3 = bit offset
+ *   ARG4 = number of bits to write
+ *   ARG8 = data to write, as a stream of bits that starts at the most
+ *          significant bit
+ */
+void BeamGlobalAssembler::emit_store_unaligned() {
+    Label loop = a.new_label();
+    Label done = a.new_label();
+    const ppc::Gp left_bit_offset = ARG3;
+    const ppc::Gp right_bit_offset = TMP6;
+    const ppc::Gp num_bits = ARG4;
+    const ppc::Gp bitdata = ARG8;
+
+    /* Combine the bits already present in the first byte with the
+     * first bits of the data. */
+    a.lbz(TMP5, ppc::Mem(TMP1));
+
+    a.srdi(TMP4, bitdata, 56);
+    a.srd(TMP4, TMP4, left_bit_offset);
+
+    a.sld(TMP5, TMP5, left_bit_offset);
+    a.clrrdi(TMP5, TMP5, 8);
+    a.srd(TMP5, TMP5, left_bit_offset);
+
+    a.or_(TMP5, TMP4, TMP5);
+
+    a.stb(TMP5, ppc::Mem(TMP1));
+    a.addi(TMP1, TMP1, imm(1));
+
+    /* Discard the bits that were stored. */
+    a.subfic(right_bit_offset, left_bit_offset, imm(8));
+    a.sld(bitdata, bitdata, right_bit_offset);
+
+    a.sub(num_bits, num_bits, right_bit_offset);
+    a.cmpdi(num_bits, imm(0));
+    a.ble(done);
+
+    a.bind(loop);
+    a.rotldi(bitdata, bitdata, 8);
+    a.stb(bitdata, ppc::Mem(TMP1));
+    a.addi(TMP1, TMP1, imm(1));
+    a.addi(num_bits, num_bits, imm(-8));
+    a.cmpdi(num_bits, imm(0));
+    a.bgt(loop);
+
+    a.bind(done);
+    a.blr();
+}
+
+/*
+ * In:
+ *   ARG4 = Size of binary in bits.
+ *   ARG5 = Extra words to allocate.
+ *   ARG6 = Number of live X registers.
+ *
+ * Out:
+ *   ARG1 = Allocated binary object.
+ */
+
+void BeamGlobalAssembler::emit_bs_init_bits_shared() {
+    emit_enter_runtime_frame();
+
+    load_erl_bits_state(ARG3);
+    load_x_reg_array(ARG2);
+    a.mr(ARG1, c_p);
+
+    emit_enter_runtime<Update::eReductions | Update::eHeapAlloc |
+                       Update::eXRegs>();
+
+    runtime_call<Eterm (*)(Process *,
+                           Eterm *,
+                           struct erl_bits_state *,
+                           Uint,
+                           Uint,
+                           unsigned),
+                 beam_jit_bs_init_bits>();
+
+    emit_leave_runtime<Update::eReductions | Update::eHeapAlloc |
+                       Update::eXRegs>();
+
+    emit_leave_runtime_frame();
+
+    ERTS_CT_ASSERT(Support::is_uint_n<16>(ERTS_PSFLG_EXITING));
+    a.lwz(TMP1, ppc::Mem(c_p, offsetof(Process, state.value)));
+    a.andi_rc(LR_TMP, TMP1, imm(ERTS_PSFLG_EXITING));
+    far_bne(labels[do_schedule]);
+
+    a.blr();
+}
+
 /*
  * Here follows the bs_match instruction and friends.
  */

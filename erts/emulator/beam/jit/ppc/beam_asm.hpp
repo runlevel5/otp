@@ -1361,6 +1361,20 @@ protected:
                         const ppc::Gp bin_offset,
                         const ppc::Gp bitdata);
 
+    void update_bin_state(ppc::Gp bin_offset,
+                          Sint bit_offset,
+                          Sint size,
+                          ppc::Gp size_reg);
+    void set_zero(Sint effectiveSize);
+    void emit_construct_utf8(const ArgVal &Src,
+                             Sint bit_offset,
+                             bool is_byte_aligned);
+    void emit_store_bytes(ppc::Gp data,
+                          bool big_endian,
+                          ppc::Gp base,
+                          int first_byte,
+                          int num_bytes);
+
     void emit_reverse_bytes(const ppc::Gp &dst, const ppc::Gp &src, Uint bits);
 
     void emit_extract_integer(const ppc::Gp &bitdata,
