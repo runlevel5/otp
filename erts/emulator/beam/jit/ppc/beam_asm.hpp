@@ -1327,6 +1327,12 @@ protected:
                                 const ArgSource &Src2,
                                 const ppc::Gp src2_reg);
 
+    void emit_cmp_branch_if_smalls(const ArgSource &LHS,
+                                   const ppc::Gp lhs_reg,
+                                   const ArgSource &RHS,
+                                   const ppc::Gp rhs_reg,
+                                   const Label smalls);
+
     void emit_are_both_small(const ArgSource &LHS,
                              const ppc::Gp lhs_reg,
                              const ArgSource &RHS,
@@ -1748,6 +1754,24 @@ protected:
                 a.beq(Unequal);
             }
         }
+    }
+
+    /* Sets the EQ bit of CR0 if both sources are immediates. Clobbers
+     * SUPER_TMP. */
+    void emit_are_both_immediate(const ArgVal &Src1,
+                                 ppc::Gp Reg1,
+                                 const ArgVal &Src2,
+                                 ppc::Gp Reg2) {
+        ERTS_CT_ASSERT(TAG_PRIMARY_IMMED1 == _TAG_PRIMARY_MASK);
+        if (always_immediate(Src1)) {
+            a.andi_rc(SUPER_TMP, Reg2, imm(_TAG_PRIMARY_MASK));
+        } else if (always_immediate(Src2)) {
+            a.andi_rc(SUPER_TMP, Reg1, imm(_TAG_PRIMARY_MASK));
+        } else {
+            a.and_(SUPER_TMP, Reg1, Reg2);
+            a.andi_rc(SUPER_TMP, SUPER_TMP, imm(_TAG_PRIMARY_MASK));
+        }
+        a.cmpdi(SUPER_TMP, imm(TAG_PRIMARY_IMMED1));
     }
 
     /* Signed compare of `gp` and `arg`, with the result in `cr`. */

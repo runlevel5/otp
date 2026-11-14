@@ -158,14 +158,6 @@ void BeamGlobalAssembler::emit_int_div_rem_guard_shared() {
     emit_nyi("int_div_rem_guard_shared");
 }
 
-void BeamGlobalAssembler::emit_is_in_range_shared() {
-    emit_nyi("is_in_range_shared");
-}
-
-void BeamGlobalAssembler::emit_is_ge_lt_shared() {
-    emit_nyi("is_ge_lt_shared");
-}
-
 void BeamGlobalAssembler::emit_mul_add_body_shared() {
     emit_nyi("mul_add_body_shared");
 }
@@ -467,72 +459,11 @@ void BeamModuleAssembler::emit_is_any_native_record(const ArgLabel &,
     emit_nyi("is_any_native_record");
 }
 
-void BeamModuleAssembler::emit_is_eq(const ArgLabel &,
-                                     const ArgSource &,
-                                     const ArgSource &) {
-    emit_nyi("is_eq");
-}
-
-void BeamModuleAssembler::emit_is_ge(const ArgLabel &,
-                                     const ArgSource &,
-                                     const ArgSource &) {
-    emit_nyi("is_ge");
-}
-
-void BeamModuleAssembler::emit_is_ge_ge(const ArgLabel &,
-                                        const ArgLabel &,
-                                        const ArgRegister &,
-                                        const ArgConstant &,
-                                        const ArgConstant &) {
-    emit_nyi("is_ge_ge");
-}
-
-void BeamModuleAssembler::emit_is_ge_lt(const ArgLabel &,
-                                        const ArgLabel &,
-                                        const ArgRegister &,
-                                        const ArgConstant &,
-                                        const ArgConstant &) {
-    emit_nyi("is_ge_lt");
-}
-
-void BeamModuleAssembler::emit_is_in_range(const ArgLabel &,
-                                           const ArgLabel &,
-                                           const ArgRegister &,
-                                           const ArgConstant &,
-                                           const ArgConstant &) {
-    emit_nyi("is_in_range");
-}
-
-void BeamModuleAssembler::emit_is_int_ge(const ArgLabel &,
-                                         const ArgRegister &,
-                                         const ArgConstant &) {
-    emit_nyi("is_int_ge");
-}
-
-void BeamModuleAssembler::emit_is_int_in_range(const ArgLabel &,
-                                               const ArgRegister &,
-                                               const ArgConstant &,
-                                               const ArgConstant &) {
-    emit_nyi("is_int_in_range");
-}
-
-void BeamModuleAssembler::emit_is_lt(const ArgLabel &,
-                                     const ArgSource &,
-                                     const ArgSource &) {
-    emit_nyi("is_lt");
-}
-
 void BeamModuleAssembler::emit_is_native_record(const ArgLabel &,
                                                 const ArgRegister &,
                                                 const ArgAtom &,
                                                 const ArgAtom &) {
     emit_nyi("is_native_record");
-}
-
-void BeamModuleAssembler::emit_is_ne(const ArgLabel &,
-                                     const ArgSource &,
-                                     const ArgSource &) {
-    emit_nyi("is_ne");
 }
 
 void BeamModuleAssembler::emit_is_record_accessible(const ArgLabel &,
