@@ -148,16 +148,18 @@ byte *BeamAssemblerCommon::getCode(char *labelName) {
     return (byte *)getCode(code.label_by_name(labelName, strlen(labelName)));
 }
 
-void BeamAssemblerCommon::handleError(Error err,
-                                      const char *message,
-                                      BaseEmitter *origin) {
+void BeamAssemblerCommon::handle_error(Error err,
+                                       const char *message,
+                                       BaseEmitter *origin) {
     comment(message);
 
     if (logger.file() != NULL) {
         fflush(logger.file());
     }
 
-    ASSERT(0 && "Failed to encode instruction");
+    /* The instruction has not been emitted, so the code would be broken if
+     * we carried on. */
+    erts_exit(ERTS_ABORT_EXIT, "Failed to encode instruction: %s\n", message);
 }
 
 void BeamAssemblerCommon::embed_rodata(const char *labelName,
