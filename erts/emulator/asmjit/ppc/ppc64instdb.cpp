@@ -106,6 +106,17 @@ namespace InstDB {
   X(Extsh_rc    , "extsh."     , 0x7C000735u, RaRs        )  \
   X(Extsw       , "extsw"      , 0x7C0007B4u, RaRs        )  \
   X(Extsw_rc    , "extsw."     , 0x7C0007B5u, RaRs        )  \
+  X(Fabs        , "fabs"       , 0xFC000210u, FtFb        )  \
+  X(Fadd        , "fadd"       , 0xFC00002Au, FtFaFb      )  \
+  X(Fcfid       , "fcfid"      , 0xFC00069Cu, FtFb        )  \
+  X(Fcmpo       , "fcmpo"      , 0xFC000040u, BfFaFb      )  \
+  X(Fcmpu       , "fcmpu"      , 0xFC000000u, BfFaFb      )  \
+  X(Fctidz      , "fctidz"     , 0xFC00065Eu, FtFb        )  \
+  X(Fdiv        , "fdiv"       , 0xFC000024u, FtFaFb      )  \
+  X(Fmr         , "fmr"        , 0xFC000090u, FtFb        )  \
+  X(Fmul        , "fmul"       , 0xFC000032u, FtFaFc      )  \
+  X(Fneg        , "fneg"       , 0xFC000050u, FtFb        )  \
+  X(Fsub        , "fsub"       , 0xFC000028u, FtFaFb      )  \
   X(Isel        , "isel"       , 0x7C00001Eu, RtRaRbBc    )  \
   X(Lbarx       , "lbarx"      , 0x7C000068u, RtMemX      )  \
   X(Lbz         , "lbz"        , 0x88000000u, RtMemD      )  \

@@ -111,6 +111,17 @@ namespace Inst {
     kIdExtsh_rc,                         //!< Instruction 'extsh.'.
     kIdExtsw,                            //!< Instruction 'extsw'.
     kIdExtsw_rc,                         //!< Instruction 'extsw.'.
+    kIdFabs,                             //!< Instruction 'fabs'.
+    kIdFadd,                             //!< Instruction 'fadd'.
+    kIdFcfid,                            //!< Instruction 'fcfid'.
+    kIdFcmpo,                            //!< Instruction 'fcmpo'.
+    kIdFcmpu,                            //!< Instruction 'fcmpu'.
+    kIdFctidz,                           //!< Instruction 'fctidz'.
+    kIdFdiv,                             //!< Instruction 'fdiv'.
+    kIdFmr,                              //!< Instruction 'fmr'.
+    kIdFmul,                             //!< Instruction 'fmul'.
+    kIdFneg,                             //!< Instruction 'fneg'.
+    kIdFsub,                             //!< Instruction 'fsub'.
     kIdIsel,                             //!< Instruction 'isel'.
     kIdLbarx,                            //!< Instruction 'lbarx'.
     kIdLbz,                              //!< Instruction 'lbz'.

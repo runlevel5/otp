@@ -26,6 +26,11 @@ static ASMJIT_INLINE_NODEBUG bool is_gp64(const Operand_& op) noexcept {
   return op.as<Reg>().is_gp64();
 }
 
+// Tests whether the operand, which must be a register, is a 64-bit floating point register.
+static ASMJIT_INLINE_NODEBUG bool is_fp64(const Operand_& op) noexcept {
+  return op.as<Reg>().is_vec64();
+}
+
 // Tests whether the operand, which must be a register, is a condition register field.
 static ASMJIT_INLINE_NODEBUG bool is_cr(const Operand_& op) noexcept {
   return op.as<Reg>().is_reg(RegType::kPPC_Cr);
@@ -755,6 +760,58 @@ Error Assembler::_emit(InstId inst_id, const Operand_& o0, const Operand_& o1, c
         }
 
         opcode |= (o0.id() << 21) | (o1.id() << 18);
+        goto EmitOp;
+      }
+
+      break;
+    }
+
+    case InstDB::kEncodingFtFaFb:
+    case InstDB::kEncodingFtFaFc: {
+      if (isign4 == ENC_OPS3(Reg, Reg, Reg)) {
+        if (!is_fp64(o0) || !is_fp64(o1) || !is_fp64(o2)) {
+          goto InvalidInstruction;
+        }
+
+        if (!is_phys_id(o0.id(), o1.id(), o2.id())) {
+          goto InvalidPhysId;
+        }
+
+        opcode |= (o0.id() << 21) | (o1.id() << 16) | (o2.id() << (inst_info->_encoding == InstDB::kEncodingFtFaFc ? 6u : 11u));
+        goto EmitOp;
+      }
+
+      break;
+    }
+
+    case InstDB::kEncodingFtFb: {
+      if (isign4 == ENC_OPS2(Reg, Reg)) {
+        if (!is_fp64(o0) || !is_fp64(o1)) {
+          goto InvalidInstruction;
+        }
+
+        if (!is_phys_id(o0.id(), o1.id())) {
+          goto InvalidPhysId;
+        }
+
+        opcode |= (o0.id() << 21) | (o1.id() << 11);
+        goto EmitOp;
+      }
+
+      break;
+    }
+
+    case InstDB::kEncodingBfFaFb: {
+      if (isign4 == ENC_OPS3(Reg, Reg, Reg)) {
+        if (!is_cr(o0) || !is_fp64(o1) || !is_fp64(o2)) {
+          goto InvalidInstruction;
+        }
+
+        if (o0.id() > 7u || !is_phys_id(o1.id(), o2.id())) {
+          goto InvalidPhysId;
+        }
+
+        opcode |= (o0.id() << 23) | (o1.id() << 16) | (o2.id() << 11);
         goto EmitOp;
       }
 

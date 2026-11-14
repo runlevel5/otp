@@ -98,7 +98,16 @@ enum EncodingId : uint32_t {
   //! `inst RT, BFA` - general purpose register and a condition register field.
   kEncodingRtBfa,
   //! `inst RT, RA, RB, BC` - RA cannot be R0 (the instruction would read it as zero), BC is a condition register bit.
-  kEncodingRtRaRbBc
+  kEncodingRtRaRbBc,
+
+  //! `inst FRT, FRA, FRB` - floating point registers.
+  kEncodingFtFaFb,
+  //! `inst FRT, FRA, FRC` - floating point registers, the second source is encoded in the FRC field.
+  kEncodingFtFaFc,
+  //! `inst FRT, FRB` - floating point registers.
+  kEncodingFtFb,
+  //! `inst BF, FRA, FRB` - floating point compare, BF is a condition register field.
+  kEncodingBfFaFb
 };
 
 #ifndef ASMJIT_NO_TEXT
