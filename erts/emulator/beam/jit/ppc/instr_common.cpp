@@ -668,6 +668,245 @@ void BeamModuleAssembler::emit_self(const ArgRegister &Dst) {
     mov_arg(Dst, ppc::Mem(c_p, offsetof(Process, common.id)));
 }
 
+/* Copies `count` words from `from_offset` bytes past `from` to `to_offset`
+ * bytes past `to`. Neither `from` nor `to` is changed, as there is no
+ * addressing mode that increments the base register after the access.
+ *
+ * Clobbers LR_TMP, SUPER_TMP, TMP5, TMP6, and CR0. */
+void BeamModuleAssembler::emit_copy_words(ppc::Gp from,
+                                          ssize_t from_offset,
+                                          ppc::Gp to,
+                                          ssize_t to_offset,
+                                          size_t count) {
+    const ssize_t size = count * sizeof(Eterm);
+
+    check_pending_stubs();
+
+    /* Copy the words inline if we can, otherwise use a loop. */
+    if (count <= 16 && Support::is_int_n<16>(from_offset + size) &&
+        Support::is_int_n<16>(to_offset + size)) {
+        for (size_t i = 0; i < count; i++) {
+            /* Alternate between two registers to let the copies overlap. */
+            const ppc::Gp tmp = (i & 1) ? SUPER_TMP : LR_TMP;
+            const ssize_t offset = i * sizeof(Eterm);
+
+            a.ld(tmp, ppc::Mem(from, from_offset + offset));
+            a.std(tmp, ppc::Mem(to, to_offset + offset));
+        }
+    } else {
+        Label copy_next = a.new_label();
+
+        add(TMP5, from, from_offset - (ssize_t)sizeof(Eterm));
+        add(TMP6, to, to_offset - (ssize_t)sizeof(Eterm));
+        mov_imm(LR_TMP, count);
+
+        a.bind(copy_next);
+        {
+            a.ldu(SUPER_TMP, ppc::Mem(TMP5, sizeof(Eterm)));
+            a.stdu(SUPER_TMP, ppc::Mem(TMP6, sizeof(Eterm)));
+            a.addic_rc(LR_TMP, LR_TMP, imm(-1));
+            a.bne(copy_next);
+        }
+    }
+}
+
+void BeamModuleAssembler::emit_update_record(
+        const ArgAtom &Hint,
+        const ArgWord &TupleSize,
+        const ArgSource &Src,
+        const ArgRegister &Dst,
+        const ArgWord &UpdateCount,
+        const Span<const ArgVal> &updates) {
+    const size_t size_on_heap = TupleSize.get() + 1;
+    emit_update_any_record(Hint, size_on_heap, Src, Dst, UpdateCount, updates);
+}
+
+/* Update a tuple, a tuple record, or a native record. */
+void BeamModuleAssembler::emit_update_any_record(
+        const ArgAtom &Hint,
+        const size_t size_on_heap,
+        const ArgSource &Src,
+        const ArgRegister &Dst,
+        const ArgWord &UpdateCount,
+        const Span<const ArgVal> &updates) {
+    Label next = a.new_label();
+
+    ASSERT(UpdateCount.get() == updates.size());
+    ASSERT((UpdateCount.get() % 2) == 0);
+
+    ASSERT(size_on_heap > 2);
+
+    auto destination = init_destination(Dst, ARG1);
+    auto src = load_source(Src, ARG2);
+
+    ppc::Gp untagged_src = ARG3;
+    emit_untag_ptr(untagged_src, src.reg);
+
+    /* Setting a field to the same value is pretty common, so we'll check for
+     * that since it's vastly cheaper than copying if we're right, and doesn't
+     * cost much if we're wrong. */
+    if (Hint.get() == am_reuse && updates.size() == 2) {
+        const auto next_index = updates[0].as<ArgWord>().get();
+        const auto &next_value = updates[1].as<ArgSource>();
+
+        load_mem(TMP1, ppc::Mem(untagged_src, next_index * sizeof(Eterm)));
+        cmp_arg(TMP1, next_value);
+
+        if (destination.reg != src.reg) {
+            a.isel(destination.reg, src.reg, destination.reg, ppc::cr0.eq());
+        }
+        a.beq(next);
+    }
+
+    /* The new tuple is written at fixed offsets from HTOP, which is only
+     * bumped once the tuple is complete. */
+    size_t copy_index = 0;
+
+    for (size_t i = 0; i < updates.size(); i += 2) {
+        const auto next_index = updates[i].as<ArgWord>().get();
+        const auto &next_value = updates[i + 1].as<ArgSource>();
+
+        ASSERT(next_index > 0 && next_index >= copy_index);
+
+        emit_copy_words(untagged_src,
+                        copy_index * sizeof(Eterm),
+                        HTOP,
+                        copy_index * sizeof(Eterm),
+                        next_index - copy_index);
+
+        auto value = load_source(next_value, TMP1);
+        store_mem(value.reg, ppc::Mem(HTOP, next_index * sizeof(Eterm)));
+
+        copy_index = next_index + 1;
+    }
+
+    emit_copy_words(untagged_src,
+                    copy_index * sizeof(Eterm),
+                    HTOP,
+                    copy_index * sizeof(Eterm),
+                    size_on_heap - copy_index);
+
+    a.addi(destination.reg, HTOP, imm(TAG_PRIMARY_BOXED));
+    add(HTOP, HTOP, size_on_heap * sizeof(Eterm));
+
+    a.bind(next);
+    flush_var(destination);
+}
+
+void BeamModuleAssembler::emit_update_record_in_place(
+        const ArgWord &TupleSize,
+        const ArgSource &Src,
+        const ArgRegister &Dst,
+        const ArgWord &UpdateCount,
+        const Span<const ArgVal> &updates) {
+    bool all_safe = true;
+    ArgSource maybe_immediate = ArgNil();
+    const size_t size_on_heap = TupleSize.get() + 1;
+
+    ASSERT(UpdateCount.get() == updates.size());
+    ASSERT((UpdateCount.get() % 2) == 0);
+
+    ASSERT(size_on_heap > 2);
+
+    auto destination = init_destination(Dst, ARG1);
+    auto src = load_source(Src, ARG2);
+
+    ppc::Gp untagged_src = ARG3;
+    emit_untag_ptr(untagged_src, src.reg);
+
+    for (size_t i = 0; i < updates.size(); i += 2) {
+        const auto &value = updates[i + 1].as<ArgSource>();
+        if (!(always_immediate(value) || value.isLiteral())) {
+            all_safe = false;
+            if (maybe_immediate.isNil() &&
+                always_one_of<BeamTypeId::MaybeImmediate>(value)) {
+                maybe_immediate = value;
+            } else {
+                maybe_immediate = ArgNil();
+                break;
+            }
+        }
+    }
+
+    if (all_safe) {
+        comment("skipped copy fallback because all new values are safe");
+    } else {
+        Label update = a.new_label();
+
+        if (!maybe_immediate.isNil()) {
+            auto value = load_source(maybe_immediate, ARG5);
+            emit_is_boxed(update, value.reg);
+        }
+
+        /* The tuple can be updated in place if it is in the part of the
+         * heap that was allocated after the last garbage collection, that
+         * is, if high_water <= untagged_src < HTOP. */
+        a.ld(ARG4, ppc::Mem(c_p, offsetof(Process, high_water)));
+        a.cmpld(untagged_src, HTOP);
+        a.cmpld(ppc::cr1, untagged_src, ARG4);
+        a.crandc(ppc::cr0.lt(), ppc::cr0.lt(), ppc::cr1.lt());
+        a.blt(update);
+
+        emit_copy_words(untagged_src, 0, HTOP, 0, size_on_heap);
+        a.mr(untagged_src, HTOP);
+        add(HTOP, HTOP, size_on_heap * sizeof(Eterm));
+
+        a.bind(update);
+    }
+
+    for (size_t i = 0; i < updates.size(); i += 2) {
+        const auto next_index = updates[i].as<ArgWord>().get();
+        const auto &next_value = updates[i + 1].as<ArgSource>();
+
+        auto value = load_source(next_value, TMP1);
+        store_mem(value.reg,
+                  ppc::Mem(untagged_src, next_index * sizeof(Eterm)));
+    }
+
+    a.addi(destination.reg, untagged_src, imm(TAG_PRIMARY_BOXED));
+    flush_var(destination);
+
+#ifdef DEBUG
+    if (!all_safe && maybe_immediate.isNil()) {
+        Label pointer_ok = a.new_label();
+
+        /* If p->high_water contained a garbage value, a tuple not in
+         * the safe part of the new heap could have been destructively
+         * updated. */
+        comment("sanity-checking tuple pointer");
+        mov_arg(ARG2, Dst);
+        a.ld(ARG4, ppc::Mem(c_p, offsetof(Process, heap)));
+        a.cmpld(ARG2, HTOP);
+        a.cmpld(ppc::cr1, ARG2, ARG4);
+        a.crandc(ppc::cr0.lt(), ppc::cr0.lt(), ppc::cr1.lt());
+        a.blt(pointer_ok);
+
+        emit_enter_runtime();
+        a.mr(ARG1, c_p);
+        runtime_call<void (*)(Process *, Eterm), beam_jit_invalid_heap_ptr>();
+        emit_leave_runtime();
+
+        a.bind(pointer_ok);
+    }
+#endif
+}
+
+void BeamModuleAssembler::emit_set_tuple_element(const ArgSource &Element,
+                                                 const ArgRegister &Tuple,
+                                                 const ArgWord &Offset) {
+    /* TODO: As of Erlang/OTP 29, this instruction is no longer
+     * emitted by the compiler. It can be removed when the runtime
+     * system no longer supports loading code compiled by Erlang/OTP
+     * 28 or earlier. */
+
+    auto tuple = load_source(Tuple, TMP1);
+    auto element = load_source(Element, TMP2);
+    ppc::Gp boxed_ptr = emit_ptr_val(TMP1, tuple.reg);
+    ppc::Mem boxed_val = emit_boxed_val(boxed_ptr, Offset.get());
+
+    store_mem(element.reg, boxed_val);
+}
+
 void BeamModuleAssembler::emit_is_nonempty_list(const ArgLabel &Fail,
                                                 const ArgRegister &Src) {
     auto list_ptr = load_source(Src);

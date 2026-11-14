@@ -1297,6 +1297,19 @@ protected:
 
     void emit_bs_skip_bits(const ArgLabel &Fail, const ArgRegister &Ctx);
 
+    void emit_copy_words(ppc::Gp from,
+                         ssize_t from_offset,
+                         ppc::Gp to,
+                         ssize_t to_offset,
+                         size_t count);
+
+    void emit_update_any_record(const ArgAtom &Hint,
+                                const size_t size_on_heap,
+                                const ArgSource &Src,
+                                const ArgRegister &Dst,
+                                const ArgWord &UpdateCount,
+                                const Span<const ArgVal> &updates);
+
     void emit_read_bits(Uint bits,
                         const ppc::Gp bin_base,
                         const ppc::Gp bin_offset,

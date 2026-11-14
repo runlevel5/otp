@@ -746,27 +746,3 @@ void BeamModuleAssembler::emit_is_record_accessible(const ArgLabel &,
                                                     const ArgAtom &) {
     emit_nyi("is_record_accessible");
 }
-
-void BeamModuleAssembler::emit_set_tuple_element(const ArgSource &,
-                                                 const ArgRegister &,
-                                                 const ArgWord &) {
-    emit_nyi("set_tuple_element");
-}
-
-void BeamModuleAssembler::emit_update_record(const ArgAtom &,
-                                             const ArgWord &,
-                                             const ArgSource &,
-                                             const ArgRegister &,
-                                             const ArgWord &,
-                                             const Span<const ArgVal> &) {
-    emit_nyi("update_record");
-}
-
-void BeamModuleAssembler::emit_update_record_in_place(
-        const ArgWord &,
-        const ArgSource &,
-        const ArgRegister &,
-        const ArgWord &,
-        const Span<const ArgVal> &) {
-    emit_nyi("update_record_in_place");
-}
