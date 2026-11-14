@@ -188,9 +188,36 @@ const std::vector<ArgVal> BeamModuleAssembler::emit_select_untag(
     return result;
 }
 
+/*
+ * Branches to `label` if the given condition register bit is set.
+ *
+ * A conditional branch only reaches 32KB, and beyond that it has to go
+ * through a veneer. That is fine for an occasional branch, but a large
+ * select instruction creates veneers faster than they can be emitted in
+ * time for the branches that need them. Such instructions use a
+ * conditional branch around an unconditional one instead, which reaches
+ * 32MB.
+ */
+void BeamModuleAssembler::emit_select_branch(const Imm &cr_bit,
+                                             const ArgVal &label,
+                                             bool far) {
+    const ArgLabel &target = label.as<ArgLabel>();
+
+    if (far) {
+        Label next = a.new_label();
+
+        a.bc(imm(4), cr_bit, next);
+        a.b(resolve_beam_label(target, disp32MB));
+        a.bind(next);
+    } else {
+        a.bc(imm(12), cr_bit, resolve_beam_label(target, disp32K));
+    }
+}
+
 void BeamModuleAssembler::emit_linear_search(ppc::Gp comparand,
                                              Label fail,
-                                             const Span<const ArgVal> &args) {
+                                             const Span<const ArgVal> &args,
+                                             bool far) {
     int count = args.size() / 2;
 
     ASSERT(count < 128);
@@ -207,7 +234,7 @@ void BeamModuleAssembler::emit_linear_search(ppc::Gp comparand,
         }
         if (n < 2) {
             cmpl_arg(comparand, value);
-            a.beq(resolve_beam_label(label, disp32K));
+            emit_select_branch(ppc::cr0.eq(), label, far);
         } else {
             int in_range = 1;
 
@@ -228,13 +255,14 @@ void BeamModuleAssembler::emit_linear_search(ppc::Gp comparand,
                     sub(TMP6, comparand, first);
                     cmpl(TMP6, in_range);
                 }
-                a.blt(resolve_beam_label(label, disp32K));
+                emit_select_branch(ppc::cr0.lt(), label, far);
                 i += in_range - 1;
             } else {
                 emit_optimized_two_way_select(comparand,
                                               value,
                                               args[i + 1],
-                                              label);
+                                              label,
+                                              far);
                 i++;
             }
         }
@@ -386,6 +414,7 @@ void BeamModuleAssembler::emit_binsearch_nodes(ppc::Gp reg,
     const size_t remaining = (Right - Left + 1);
     const size_t mid = (Left + Right) >> 1;
     const size_t count = args.size() / 2;
+    const bool far = count >= SELECT_FAR_BRANCH_COUNT;
 
     if (remaining <= 10) {
         /* Measurements on randomly generated select_val instructions
@@ -407,7 +436,7 @@ void BeamModuleAssembler::emit_binsearch_nodes(ppc::Gp reg,
                       args.begin() + Left + count,
                       args.begin() + count + Left + remaining);
 
-        emit_linear_search(reg, fail, Span(shrunk.data(), shrunk.size()));
+        emit_linear_search(reg, fail, Span(shrunk.data(), shrunk.size()), far);
 
         return;
     }
@@ -427,10 +456,20 @@ void BeamModuleAssembler::emit_binsearch_nodes(ppc::Gp reg,
     ASSERT(Left != Right);
     ASSERT(Left != mid);
 
-    a.beq(resolve_beam_label(lbl, disp32K));
+    emit_select_branch(ppc::cr0.eq(), lbl, far);
 
     Label right_tree = a.new_label();
-    a.bgt(resolve_label(right_tree, disp32K));
+    if (mid - Left >= SELECT_FAR_BRANCH_COUNT) {
+        /* The left subtree is too large for a conditional branch to
+         * reach past it. */
+        Label left_tree = a.new_label();
+
+        a.ble(left_tree);
+        a.b(resolve_label(right_tree, disp32MB));
+        a.bind(left_tree);
+    } else {
+        a.bgt(resolve_label(right_tree, disp32K));
+    }
 
     emit_binsearch_nodes(reg, Left, mid - 1, fail, args);
 
@@ -526,7 +565,8 @@ void BeamModuleAssembler::emit_i_jump_on_val(const ArgSource &Src,
 void BeamModuleAssembler::emit_optimized_two_way_select(ppc::Gp reg,
                                                         const ArgVal &value1,
                                                         const ArgVal &value2,
-                                                        const ArgVal &label) {
+                                                        const ArgVal &label,
+                                                        bool far) {
     uint64_t x = value1.isImmed() ? value1.as<ArgImmed>().get()
                                   : value1.as<ArgWord>().get();
     uint64_t y = value2.isImmed() ? value2.as<ArgImmed>().get()
@@ -544,7 +584,7 @@ void BeamModuleAssembler::emit_optimized_two_way_select(ppc::Gp reg,
             sub(tmp, reg, x);
             cmpl(tmp, 2);
         }
-        a.blt(resolve_beam_label(label, disp32K));
+        emit_select_branch(ppc::cr0.lt(), label, far);
     } else if ((diff & (diff - 1)) == 0) {
         uint64_t combined = x | y;
         ArgWord val(combined);
@@ -565,11 +605,11 @@ void BeamModuleAssembler::emit_optimized_two_way_select(ppc::Gp reg,
         }
 
         cmpl_arg(tmp, val);
-        a.beq(resolve_beam_label(label, disp32K));
+        emit_select_branch(ppc::cr0.eq(), label, far);
     } else {
         cmpl(reg, x);
         cmpl(reg, y, ppc::cr1);
         a.cror(ppc::cr0.eq(), ppc::cr0.eq(), ppc::cr1.eq());
-        a.beq(resolve_beam_label(label, disp32K));
+        emit_select_branch(ppc::cr0.eq(), label, far);
     }
 }

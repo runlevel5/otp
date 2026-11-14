@@ -1261,9 +1261,17 @@ protected:
                                                 UWord base,
                                                 int shift);
 
+    /* The number of values at which a select instruction stops using
+     * conditional branches to reach its labels, see
+     * emit_select_branch(). */
+    static constexpr size_t SELECT_FAR_BRANCH_COUNT = 64;
+
+    void emit_select_branch(const Imm &cr_bit, const ArgVal &label, bool far);
+
     void emit_linear_search(ppc::Gp val,
                             Label fail,
-                            const Span<const ArgVal> &args);
+                            const Span<const ArgVal> &args,
+                            bool far = false);
 
     void emit_binsearch_nodes(ppc::Gp reg,
                               size_t Left,
@@ -1274,7 +1282,8 @@ protected:
     void emit_optimized_two_way_select(ppc::Gp reg,
                                        const ArgVal &value1,
                                        const ArgVal &value2,
-                                       const ArgVal &label);
+                                       const ArgVal &label,
+                                       bool far = false);
 
     void emit_error(int code);
     void emit_error(int reason, const ArgSource &Src);
