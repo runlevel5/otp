@@ -2277,3 +2277,54 @@ void BeamModuleAssembler::emit_i_debug_line(const ArgWord &Loc,
      */
     a.align(AlignMode::kCode, 8);
 }
+
+/*
+ * ARG1 = LHS
+ * ARG2 = RHS
+ *
+ * The result is returned in CR0, as if LHS and RHS had been compared
+ * as signed integers.
+ */
+void BeamGlobalAssembler::emit_arith_compare_shared() {
+    Label generic_compare = a.new_label();
+
+    /* TODO: Compare floats inline, which requires floating point
+     * support in the assembler. Until then they are handled by the
+     * generic comparison. */
+
+    /* Are both atoms? */
+    a.xori(TMP1, ARG1, imm(_TAG_IMMED2_ATOM));
+    a.xori(TMP2, ARG2, imm(_TAG_IMMED2_ATOM));
+    a.or_(TMP1, TMP1, TMP2);
+    a.andi_rc(TMP1, TMP1, imm(_TAG_IMMED2_MASK));
+    a.bne(generic_compare);
+
+    emit_enter_runtime_frame();
+    emit_enter_runtime();
+
+    runtime_call<int (*)(Eterm, Eterm), erts_cmp_atoms>();
+
+    emit_leave_runtime();
+    emit_leave_runtime_frame();
+
+    /* Note: erts_cmp_atoms() returns int, not Sint. */
+    a.cmpwi(ARG1, imm(0));
+    a.blr();
+
+    a.bind(generic_compare);
+    {
+        emit_enter_runtime_frame();
+        emit_enter_runtime();
+
+        comment("erts_cmp_compound(X, Y, 0, 0);");
+        mov_imm(ARG3, 0);
+        mov_imm(ARG4, 0);
+        runtime_call<Sint (*)(Eterm, Eterm, int, int), erts_cmp_compound>();
+
+        emit_leave_runtime();
+        emit_leave_runtime_frame();
+
+        a.cmpdi(ARG1, imm(0));
+        a.blr();
+    }
+}

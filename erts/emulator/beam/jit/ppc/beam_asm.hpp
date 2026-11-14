@@ -1305,6 +1305,28 @@ protected:
                             const ppc::Gp rhs_reg,
                             const Label next);
 
+    void emit_cmp_immed_to_bool(const Imm &cr_bit,
+                                bool value_if_set,
+                                const ArgSource &LHS,
+                                const ArgSource &RHS,
+                                const ArgRegister &Dst);
+
+    void emit_cond_to_bool(const Imm &cr_bit,
+                           bool value_if_set,
+                           const ArgRegister &Dst);
+    void emit_bif_is_ge_lt(bool is_lt,
+                           const ArgSource &LHS,
+                           const ArgSource &RHS,
+                           const ArgRegister &Dst);
+    void emit_bif_min_max(bool is_max,
+                          const ArgSource &LHS,
+                          const ArgSource &RHS,
+                          const ArgRegister &Dst);
+    void emit_are_both_booleans(const ArgSource &Src1,
+                                const ppc::Gp src1_reg,
+                                const ArgSource &Src2,
+                                const ppc::Gp src2_reg);
+
     void emit_are_both_small(const ArgSource &LHS,
                              const ppc::Gp lhs_reg,
                              const ArgSource &RHS,
