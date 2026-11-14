@@ -1333,6 +1333,10 @@ protected:
                                    const ppc::Gp rhs_reg,
                                    const Label smalls);
 
+    void emit_bif_bit_size_inline(const ArgLabel &Fail,
+                                  const ArgSource &Src,
+                                  const ppc::Gp src_reg);
+
     void emit_are_both_small(const ArgSource &LHS,
                              const ppc::Gp lhs_reg,
                              const ArgSource &RHS,

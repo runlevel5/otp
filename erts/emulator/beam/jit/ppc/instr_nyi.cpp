@@ -46,30 +46,6 @@ void BeamGlobalAssembler::emit_nyi(const char *msg) {
  * Shared fragments.
  */
 
-void BeamGlobalAssembler::emit_bif_bit_size_body() {
-    emit_nyi("bif_bit_size_body");
-}
-
-void BeamGlobalAssembler::emit_bif_byte_size_body() {
-    emit_nyi("bif_byte_size_body");
-}
-
-void BeamGlobalAssembler::emit_bif_element_body_shared() {
-    emit_nyi("bif_element_body_shared");
-}
-
-void BeamGlobalAssembler::emit_bif_element_guard_shared() {
-    emit_nyi("bif_element_guard_shared");
-}
-
-void BeamGlobalAssembler::emit_bif_tuple_size_body() {
-    emit_nyi("bif_tuple_size_body");
-}
-
-void BeamGlobalAssembler::emit_bif_tuple_size_guard() {
-    emit_nyi("bif_tuple_size_guard");
-}
-
 void BeamGlobalAssembler::emit_bs_create_bin_error_shared() {
     emit_nyi("bs_create_bin_error_shared");
 }
@@ -106,10 +82,6 @@ void BeamGlobalAssembler::emit_get_sint64_shared() {
     emit_nyi("get_sint64_shared");
 }
 
-void BeamGlobalAssembler::emit_handle_element_error_shared() {
-    emit_nyi("handle_element_error_shared");
-}
-
 void BeamGlobalAssembler::emit_handle_map_get_badkey() {
     emit_nyi("handle_map_get_badkey");
 }
@@ -120,10 +92,6 @@ void BeamGlobalAssembler::emit_handle_map_get_badmap() {
 
 void BeamGlobalAssembler::emit_handle_map_size_error() {
     emit_nyi("handle_map_size_error");
-}
-
-void BeamGlobalAssembler::emit_handle_node_error() {
-    emit_nyi("handle_node_error");
 }
 
 void BeamGlobalAssembler::emit_i_ctz_body_shared() {
@@ -178,25 +146,6 @@ void BeamGlobalAssembler::emit_store_unaligned() {
  * Instructions.
  */
 
-void BeamModuleAssembler::emit_bif_bit_size(const ArgLabel &,
-                                            const ArgSource &,
-                                            const ArgRegister &) {
-    emit_nyi("bif_bit_size");
-}
-
-void BeamModuleAssembler::emit_bif_byte_size(const ArgLabel &,
-                                             const ArgSource &,
-                                             const ArgRegister &) {
-    emit_nyi("bif_byte_size");
-}
-
-void BeamModuleAssembler::emit_bif_element(const ArgLabel &,
-                                           const ArgSource &,
-                                           const ArgSource &,
-                                           const ArgRegister &) {
-    emit_nyi("bif_element");
-}
-
 void BeamModuleAssembler::emit_bif_is_map_key(const ArgWord &,
                                               const ArgLabel &,
                                               const ArgSource &,
@@ -216,18 +165,6 @@ void BeamModuleAssembler::emit_bif_map_size(const ArgLabel &,
                                             const ArgSource &,
                                             const ArgRegister &) {
     emit_nyi("bif_map_size");
-}
-
-void BeamModuleAssembler::emit_bif_node(const ArgLabel &,
-                                        const ArgRegister &,
-                                        const ArgRegister &) {
-    emit_nyi("bif_node");
-}
-
-void BeamModuleAssembler::emit_bif_tuple_size(const ArgLabel &,
-                                              const ArgRegister &,
-                                              const ArgRegister &) {
-    emit_nyi("bif_tuple_size");
 }
 
 void BeamModuleAssembler::emit_bs_init_writable() {
