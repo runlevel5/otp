@@ -1944,13 +1944,33 @@ void BeamModuleAssembler::emit_is_ne(const ArgLabel &Fail,
  * as signed integers.
  */
 void BeamGlobalAssembler::emit_arith_compare_shared() {
-    Label generic_compare = a.new_label();
+    Label atom_compare = a.new_label(), generic_compare = a.new_label();
 
-    /* TODO: Compare floats inline, which requires floating point
-     * support in the assembler. Until then they are handled by the
-     * generic comparison. */
+    /* Are both floats?
+     *
+     * This is done first as relative comparisons on atoms doesn't make much
+     * sense. */
+    a.or_(TMP1, ARG1, ARG2);
+    emit_is_boxed(atom_compare, TMP1);
+
+    ppc::Gp boxed_ptr1 = emit_ptr_val(TMP1, ARG1);
+    load_mem(TMP3, emit_boxed_val(boxed_ptr1));
+    ppc::Gp boxed_ptr2 = emit_ptr_val(TMP2, ARG2);
+    load_mem(TMP4, emit_boxed_val(boxed_ptr2));
+
+    mov_imm(TMP5, HEADER_FLONUM);
+    a.cmpd(TMP3, TMP5);
+    a.cmpd(ppc::cr1, TMP4, TMP5);
+    a.crand(ppc::cr0.eq(), ppc::cr0.eq(), ppc::cr1.eq());
+    a.bne(generic_compare);
+
+    a.lfd(ppc::f0, emit_boxed_val(boxed_ptr1, sizeof(Eterm)));
+    a.lfd(ppc::f1, emit_boxed_val(boxed_ptr2, sizeof(Eterm)));
+    a.fcmpu(ppc::cr0, ppc::f0, ppc::f1);
+    a.blr();
 
     /* Are both atoms? */
+    a.bind(atom_compare);
     a.xori(TMP1, ARG1, imm(_TAG_IMMED2_ATOM));
     a.xori(TMP2, ARG2, imm(_TAG_IMMED2_ATOM));
     a.or_(TMP1, TMP1, TMP2);
@@ -2278,14 +2298,37 @@ void BeamModuleAssembler::emit_is_ge(const ArgLabel &Fail,
  * is greater than Max, and EQ if it is in the range.
  */
 void BeamGlobalAssembler::emit_is_in_range_shared() {
-    Label immediate = a.new_label(), done = a.new_label();
+    Label immediate = a.new_label(), generic_compare = a.new_label(),
+          float_done = a.new_label(), done = a.new_label();
 
+    /* Is the source a float? */
     emit_is_boxed(immediate, ARG1);
 
-    /* TODO: Compare floats inline, which requires floating point
-     * support in the assembler. Until then they are handled by the
-     * generic comparison. */
+    ppc::Gp boxed_ptr = emit_ptr_val(TMP1, ARG1);
+    load_mem(TMP2, emit_boxed_val(boxed_ptr));
 
+    cmp(TMP2, HEADER_FLONUM);
+    a.bne(generic_compare);
+
+    a.lfd(ppc::f0, emit_boxed_val(boxed_ptr, sizeof(Eterm)));
+    a.sradi(TMP1, ARG2, imm(_TAG_IMMED1_SIZE));
+    emit_int_to_double(ppc::f1, TMP1);
+
+    a.fcmpu(ppc::cr0, ppc::f0, ppc::f1);
+    a.blt(float_done);
+
+    a.sradi(TMP1, ARG3, imm(_TAG_IMMED1_SIZE));
+    emit_int_to_double(ppc::f1, TMP1);
+    a.fcmpu(ppc::cr0, ppc::f0, ppc::f1);
+    a.bgt(float_done);
+
+    /* The float is in the range, set the EQ bit. */
+    a.cmpd(ARG1, ARG1);
+
+    a.bind(float_done);
+    a.blr();
+
+    a.bind(generic_compare);
     emit_enter_runtime_frame();
     emit_enter_runtime();
 

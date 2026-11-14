@@ -1149,6 +1149,7 @@ JIT_OBJS += \
 	$(OBJDIR)/instr_bs.o \
 	$(OBJDIR)/instr_call.o \
 	$(OBJDIR)/instr_common.o \
+	$(OBJDIR)/instr_float.o \
 	$(OBJDIR)/instr_fun.o \
 	$(OBJDIR)/instr_guard_bifs.o \
 	$(OBJDIR)/instr_map.o \

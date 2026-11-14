@@ -641,6 +641,17 @@ protected:
 #endif
     }
 
+    /* Converts the signed integer in `src` to a double.
+     *
+     * The value has to go through memory, as there is no instruction that
+     * moves a general purpose register to a floating point register on all
+     * the processors we support. Clobbers TMP_MEM5q. */
+    void emit_int_to_double(ppc::Vec dst, ppc::Gp src) {
+        a.std(src, TMP_MEM5q);
+        a.lfd(dst, TMP_MEM5q);
+        a.fcfid(dst, dst);
+    }
+
     void emit_untag_ptr(ppc::Gp Dst, ppc::Gp Src) {
         ERTS_CT_ASSERT(TAG_PTR_MASK__ == 7);
         a.clrrdi(Dst, Src, 3);
@@ -1354,6 +1365,11 @@ protected:
                       const ArgRegister &Remainder,
                       bool need_div,
                       bool need_rem);
+
+    void emit_float_instr(uint32_t instId,
+                          const ArgFRegister &LHS,
+                          const ArgFRegister &RHS,
+                          const ArgFRegister &Dst);
 
     void emit_are_both_small(const ArgSource &LHS,
                              const ppc::Gp lhs_reg,
