@@ -46,10 +46,6 @@ void BeamGlobalAssembler::emit_nyi(const char *msg) {
  * Shared fragments.
  */
 
-void BeamGlobalAssembler::emit_create_native_record_shared() {
-    emit_nyi("create_native_record_shared");
-}
-
 void BeamGlobalAssembler::emit_i_func_info_shared() {
     emit_nyi("i_func_info_shared");
 }
@@ -57,85 +53,3 @@ void BeamGlobalAssembler::emit_i_func_info_shared() {
 /*
  * Instructions.
  */
-
-void BeamModuleAssembler::emit_get_record_field(const ArgLabel &,
-                                                const ArgRegister &,
-                                                const ArgConstant &,
-                                                const ArgAtom &,
-                                                const ArgRegister &) {
-    emit_nyi("get_record_field");
-}
-
-void BeamModuleAssembler::emit_i_create_local_native_record(
-        const ArgLiteral &,
-        const ArgRegister &,
-        const ArgWord &,
-        const ArgWord &,
-        const Span<const ArgVal> &) {
-    emit_nyi("i_create_local_native_record");
-}
-
-void BeamModuleAssembler::emit_i_create_native_record(
-        const ArgLabel &,
-        const ArgConstant &,
-        const ArgRegister &,
-        const ArgWord &,
-        const ArgWord &,
-        const Span<const ArgVal> &) {
-    emit_nyi("i_create_native_record");
-}
-
-void BeamModuleAssembler::emit_i_get_local_record_elements(
-        const ArgLiteral &,
-        const ArgRegister &,
-        const ArgWord &,
-        const Span<const ArgVal> &) {
-    emit_nyi("i_get_local_record_elements");
-}
-
-void BeamModuleAssembler::emit_i_get_record_elements(
-        const ArgLabel &,
-        const ArgRegister &,
-        const ArgWord &,
-        const Span<const ArgVal> &) {
-    emit_nyi("i_get_record_elements");
-}
-
-void BeamModuleAssembler::emit_i_update_local_native_record(
-        const ArgAtom &,
-        const ArgLiteral &,
-        const ArgSource &,
-        const ArgRegister &,
-        const ArgWord &,
-        const ArgWord &,
-        const Span<const ArgVal> &) {
-    emit_nyi("i_update_local_native_record");
-}
-
-void BeamModuleAssembler::emit_i_update_native_record(
-        const ArgLabel &,
-        const ArgSource &,
-        const ArgRegister &,
-        const ArgWord &,
-        const ArgWord &,
-        const Span<const ArgVal> &) {
-    emit_nyi("i_update_native_record");
-}
-
-void BeamModuleAssembler::emit_is_any_native_record(const ArgLabel &,
-                                                    const ArgRegister &) {
-    emit_nyi("is_any_native_record");
-}
-
-void BeamModuleAssembler::emit_is_native_record(const ArgLabel &,
-                                                const ArgRegister &,
-                                                const ArgAtom &,
-                                                const ArgAtom &) {
-    emit_nyi("is_native_record");
-}
-
-void BeamModuleAssembler::emit_is_record_accessible(const ArgLabel &,
-                                                    const ArgRegister &,
-                                                    const ArgAtom &) {
-    emit_nyi("is_record_accessible");
-}

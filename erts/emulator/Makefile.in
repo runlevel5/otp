@@ -1155,6 +1155,7 @@ JIT_OBJS += \
 	$(OBJDIR)/instr_map.o \
 	$(OBJDIR)/instr_msg.o \
 	$(OBJDIR)/instr_nyi.o \
+	$(OBJDIR)/instr_records.o \
 	$(OBJDIR)/instr_select.o \
 	$(OBJDIR)/instr_trace.o
 else

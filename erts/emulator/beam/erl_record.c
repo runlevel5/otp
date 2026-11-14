@@ -445,7 +445,8 @@ Eterm erl_create_native_record_jit(Process* p, Eterm* reg,
     name = tuple_ptr[2];
 
     needed = live + 5 + 2 + CP_SIZE;
-#if !defined(NATIVE_ERLANG_STACK) && !defined(__aarch64__)
+#if !defined(NATIVE_ERLANG_STACK) && !defined(__aarch64__) &&                \
+        !defined(__powerpc64__)
     needed += 1;
 #endif
 
@@ -478,7 +479,8 @@ Eterm erl_create_native_record_jit(Process* p, Eterm* reg,
     E[2] = make_small(live);
     E[1] = make_small(size);
 
-#if !defined(NATIVE_ERLANG_STACK) && !defined(__aarch64__)
+#if !defined(NATIVE_ERLANG_STACK) && !defined(__aarch64__) &&                \
+        !defined(__powerpc64__)
     E[0] = NIL;                 /* Reserved for CP pointing to the
                                  * next instruction. */
     E--;
@@ -516,7 +518,8 @@ Eterm erl_finish_create_record_jit(Process* p,
     Uint size;
     Eterm big;
     const Eterm* new_p = 0;
-#if !defined(NATIVE_ERLANG_STACK) && !defined(__aarch64__)
+#if !defined(NATIVE_ERLANG_STACK) && !defined(__aarch64__) &&                \
+        !defined(__powerpc64__)
     Eterm cp;
 #endif
     Eterm res;
@@ -524,7 +527,8 @@ Eterm erl_finish_create_record_jit(Process* p,
     /* We get here after having attempted to load the module defining
      * the record. Now we can attempt to create the record value. */
 
-#if !defined(NATIVE_ERLANG_STACK) && !defined(__aarch64__)
+#if !defined(NATIVE_ERLANG_STACK) && !defined(__aarch64__) &&                \
+        !defined(__powerpc64__)
     /* Restore the continuation pointer to our caller.
      * Discard the extra continuation pointers to restore
      * the Erlang stack to its prior state. This is necessary
@@ -556,7 +560,8 @@ Eterm erl_finish_create_record_jit(Process* p,
     res = erl_create_native_record(p, reg, current_code_index,
                                    id, live, size, new_p, false);
 
-#if !defined(NATIVE_ERLANG_STACK) && !defined(__aarch64__)
+#if !defined(NATIVE_ERLANG_STACK) && !defined(__aarch64__) &&                \
+        !defined(__powerpc64__)
     /* Stash the continuation pointer where the caller (end of
      * `finish_create`) can easily find it.*/
     erts_proc_sched_data(p)->registers->aux_regs.d.TMP_MEM[0] = (UWord)cp;
