@@ -70,14 +70,6 @@ void BeamGlobalAssembler::emit_i_func_info_shared() {
     emit_nyi("i_func_info_shared");
 }
 
-void BeamGlobalAssembler::emit_int_div_rem_body_shared() {
-    emit_nyi("int_div_rem_body_shared");
-}
-
-void BeamGlobalAssembler::emit_int_div_rem_guard_shared() {
-    emit_nyi("int_div_rem_guard_shared");
-}
-
 /*
  * Instructions.
  */
@@ -153,15 +145,6 @@ void BeamModuleAssembler::emit_i_create_native_record(
     emit_nyi("i_create_native_record");
 }
 
-void BeamModuleAssembler::emit_i_div_rem(const ArgLabel &,
-                                         const ArgWord &,
-                                         const ArgSource &,
-                                         const ArgSource &,
-                                         const ArgRegister &,
-                                         const ArgRegister &) {
-    emit_nyi("i_div_rem");
-}
-
 void BeamModuleAssembler::emit_i_fadd(const ArgFRegister &,
                                       const ArgFRegister &,
                                       const ArgFRegister &) {
@@ -205,39 +188,6 @@ void BeamModuleAssembler::emit_i_get_record_elements(
         const ArgWord &,
         const Span<const ArgVal> &) {
     emit_nyi("i_get_record_elements");
-}
-
-void BeamModuleAssembler::emit_i_int_div(const ArgLabel &,
-                                         const ArgWord &,
-                                         const ArgSource &,
-                                         const ArgSource &,
-                                         const ArgRegister &) {
-    emit_nyi("i_int_div");
-}
-
-void BeamModuleAssembler::emit_i_m_div(const ArgLabel &,
-                                       const ArgWord &,
-                                       const ArgSource &,
-                                       const ArgSource &,
-                                       const ArgRegister &) {
-    emit_nyi("i_m_div");
-}
-
-void BeamModuleAssembler::emit_i_rem(const ArgLabel &,
-                                     const ArgWord &,
-                                     const ArgSource &,
-                                     const ArgSource &,
-                                     const ArgRegister &) {
-    emit_nyi("i_rem");
-}
-
-void BeamModuleAssembler::emit_i_rem_div(const ArgLabel &,
-                                         const ArgWord &,
-                                         const ArgSource &,
-                                         const ArgSource &,
-                                         const ArgRegister &,
-                                         const ArgRegister &) {
-    emit_nyi("i_rem_div");
 }
 
 void BeamModuleAssembler::emit_i_update_local_native_record(

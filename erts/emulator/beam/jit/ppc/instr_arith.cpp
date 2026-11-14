@@ -857,6 +857,431 @@ void BeamModuleAssembler::emit_i_mul_add(const ArgLabel &Fail,
     mov_arg(Dst, ARG1);
 }
 
+/*
+ * ARG2 = LHS
+ * ARG3 = RHS
+ *
+ * Quotient is returned in ARG1, remainder in ARG2.
+ * Error is indicated by the EQ bit of CR0.
+ */
+void BeamGlobalAssembler::emit_int_div_rem_guard_shared() {
+    Label exit = a.new_label(), generic = a.new_label();
+
+    /* Speculatively go ahead with the division. Division by zero does
+     * not trap, it merely gives an undefined result. */
+    a.sradi(TMP1, ARG2, imm(_TAG_IMMED1_SIZE));
+    a.sradi(TMP2, ARG3, imm(_TAG_IMMED1_SIZE));
+    a.divd(TMP3, TMP1, TMP2);
+    a.mulld(TMP4, TMP3, TMP2);
+    a.sub(TMP4, TMP1, TMP4);
+
+    a.cmpdi(ARG3, imm(make_small(0)));
+    a.beq(exit);
+
+    /* Check whether both operands are small integers. */
+    ERTS_CT_ASSERT(_TAG_IMMED1_SMALL == _TAG_IMMED1_MASK);
+    a.and_(TMP1, ARG2, ARG3);
+    a.andi_rc(TMP1, TMP1, imm(_TAG_IMMED1_MASK));
+    a.cmpdi(TMP1, imm(_TAG_IMMED1_SMALL));
+    a.bne(generic);
+
+    /* MIN_SMALL divided by -1 will overflow, and we'll need to fall
+     * back to the generic handler in that case. */
+    a.sradi(TMP1, TMP3, imm(SMALL_BITS - 1));
+    a.cmpdi(TMP1, imm(1));
+    a.bge(generic);
+
+    /* The EQ bit is now clear (meaning no error), and none of the
+     * instructions below change it. */
+
+    a.sldi(TMP3, TMP3, _TAG_IMMED1_SIZE);
+    a.sldi(TMP4, TMP4, _TAG_IMMED1_SIZE);
+    a.ori(ARG1, TMP3, imm(_TAG_IMMED1_SMALL));
+    a.ori(ARG2, TMP4, imm(_TAG_IMMED1_SMALL));
+
+    a.bind(exit);
+    {
+        a.blr();
+    }
+
+    a.bind(generic);
+    {
+        emit_enter_runtime_frame();
+        emit_enter_runtime<Update::eReductions>();
+
+        a.mr(ARG1, c_p);
+        lea(ARG4, TMP_MEM4q);
+        lea(ARG5, TMP_MEM5q);
+        runtime_call<int (*)(Process *, Eterm, Eterm, Eterm *, Eterm *),
+                     erts_int_div_rem>();
+
+        emit_leave_runtime<Update::eReductions>();
+        emit_leave_runtime_frame();
+
+        /* Note: erts_int_div_rem() returns int, not Sint. */
+        a.cmpwi(ARG1, imm(0));
+        a.ld(ARG1, TMP_MEM4q);
+        a.ld(ARG2, TMP_MEM5q);
+
+        a.blr();
+    }
+}
+
+/* ARG2 = LHS
+ * ARG3 = RHS
+ * ARG4 = error MFA
+ *
+ * Quotient is returned in ARG1, remainder in ARG2.
+ */
+void BeamGlobalAssembler::emit_int_div_rem_body_shared() {
+    Label div_zero = a.new_label(), generic_div = a.new_label(),
+          generic_error = a.new_label();
+
+    /* Speculatively go ahead with the division. Division by zero does
+     * not trap, it merely gives an undefined result. */
+    a.sradi(TMP1, ARG2, imm(_TAG_IMMED1_SIZE));
+    a.sradi(TMP2, ARG3, imm(_TAG_IMMED1_SIZE));
+    a.divd(TMP3, TMP1, TMP2);
+    a.mulld(TMP4, TMP3, TMP2);
+    a.sub(TMP4, TMP1, TMP4);
+
+    a.cmpdi(ARG3, imm(make_small(0)));
+    a.beq(div_zero);
+
+    /* Check whether both operands are small integers. */
+    ERTS_CT_ASSERT(_TAG_IMMED1_SMALL == _TAG_IMMED1_MASK);
+    a.and_(TMP1, ARG2, ARG3);
+    a.andi_rc(TMP1, TMP1, imm(_TAG_IMMED1_MASK));
+    a.cmpdi(TMP1, imm(_TAG_IMMED1_SMALL));
+    a.bne(generic_div);
+
+    /* MIN_SMALL divided by -1 will overflow, and we'll need to fall
+     * back to the generic handler in that case. */
+    a.sradi(TMP1, TMP3, imm(SMALL_BITS - 1));
+    a.cmpdi(TMP1, imm(1));
+    a.bge(generic_div);
+
+    a.sldi(TMP3, TMP3, _TAG_IMMED1_SIZE);
+    a.sldi(TMP4, TMP4, _TAG_IMMED1_SIZE);
+    a.ori(ARG1, TMP3, imm(_TAG_IMMED1_SMALL));
+    a.ori(ARG2, TMP4, imm(_TAG_IMMED1_SMALL));
+
+    a.blr();
+
+    a.bind(generic_div);
+    {
+        emit_enter_runtime_frame();
+        emit_enter_runtime<Update::eReductions>();
+
+        /* Save MFA and original arguments for the error path. */
+        a.std(ARG2, TMP_MEM1q);
+        a.std(ARG3, TMP_MEM2q);
+        a.std(ARG4, TMP_MEM3q);
+
+        a.mr(ARG1, c_p);
+        lea(ARG4, TMP_MEM4q);
+        lea(ARG5, TMP_MEM5q);
+        runtime_call<int (*)(Process *, Eterm, Eterm, Eterm *, Eterm *),
+                     erts_int_div_rem>();
+
+        emit_leave_runtime<Update::eReductions>();
+        emit_leave_runtime_frame();
+
+        /* Note: erts_int_div_rem() returns int, not Sint. */
+        a.cmpwi(ARG1, imm(0));
+        a.ld(ARG1, TMP_MEM4q);
+        a.ld(ARG2, TMP_MEM5q);
+        a.beq(generic_error);
+
+        a.blr();
+    }
+
+    a.bind(div_zero);
+    {
+        mov_imm(TMP1, EXC_BADARITH);
+        a.std(TMP1, ppc::Mem(c_p, offsetof(Process, freason)));
+        a.mr(XREG0, ARG2);
+        a.mr(XREG1, ARG3);
+        a.b(labels[raise_exception]);
+    }
+
+    a.bind(generic_error);
+    {
+        a.ld(XREG0, TMP_MEM1q);
+        a.ld(XREG1, TMP_MEM2q);
+        a.ld(ARG4, TMP_MEM3q); /* MFA */
+        a.b(labels[raise_exception]);
+    }
+}
+
+void BeamModuleAssembler::emit_div_rem_literal(Sint divisor,
+                                               const ArgSource &Dividend,
+                                               ppc::Gp dividend,
+                                               ppc::Gp quotient,
+                                               ppc::Gp remainder,
+                                               const Label &generic,
+                                               bool need_div,
+                                               bool need_rem) {
+    bool small_dividend = !generic.is_valid();
+
+    ASSERT(divisor != (Sint)0);
+
+    if (!small_dividend) {
+        a.andi_rc(TMP1, dividend, imm(_TAG_IMMED1_MASK));
+        a.cmpdi(TMP1, imm(_TAG_IMMED1_SMALL));
+        a.bne(generic);
+    }
+
+    if (Support::is_power_of_2(divisor)) {
+        ppc::Gp original_dividend = dividend;
+        int shift = Support::ctz<Eterm>(divisor);
+
+        ERTS_CT_ASSERT(_TAG_IMMED1_SMALL == _TAG_IMMED1_MASK);
+        if (std::get<0>(getClampedRange(Dividend)) >= 0) {
+            /* Positive dividend. */
+            if (need_div) {
+                comment("optimized div by replacing with right shift");
+                if (need_rem && quotient == dividend) {
+                    original_dividend = TMP5;
+                    a.mr(original_dividend, dividend);
+                }
+                a.srdi(quotient, dividend, shift);
+                a.ori(quotient, quotient, imm(_TAG_IMMED1_SMALL));
+            }
+            if (need_rem) {
+                comment("optimized rem by replacing with masking");
+                a.clrldi(remainder,
+                         original_dividend,
+                         64 - (shift + _TAG_IMMED1_SIZE));
+            }
+        } else {
+            /* Negative dividend. */
+            if (need_div) {
+                comment("optimized div by replacing with right shift");
+            }
+            if (divisor == 2) {
+                ERTS_CT_ASSERT(_TAG_IMMED1_SMALL == _TAG_IMMED1_MASK);
+                a.srdi(TMP1, dividend, 63);
+                a.add(TMP3, dividend, TMP1);
+            } else {
+                add(TMP1, dividend, (divisor - 1) << _TAG_IMMED1_SIZE);
+                a.cmpdi(dividend, imm(0));
+                a.isel(TMP3, TMP1, dividend, ppc::cr0.lt());
+            }
+            if (need_div) {
+                if (need_rem && quotient == dividend) {
+                    original_dividend = TMP5;
+                    a.mr(original_dividend, dividend);
+                }
+                a.sradi(quotient, TMP3, imm(shift));
+                a.ori(quotient, quotient, imm(_TAG_IMMED1_SMALL));
+            }
+            if (need_rem) {
+                comment("optimized rem by replacing with subtraction");
+                a.clrrdi(TMP1, TMP3, shift + _TAG_IMMED1_SIZE);
+                a.sub(remainder, original_dividend, TMP1);
+            }
+        }
+    } else {
+        a.sradi(TMP1, dividend, imm(_TAG_IMMED1_SIZE));
+        if (divisor > 0) {
+            unsigned shift;
+            Uint reciprocal = beam_jit_div_reciprocal(divisor, &shift);
+
+            comment("optimized div by multiplying with the reciprocal");
+            mov_imm(TMP3, reciprocal);
+            a.mulhd(quotient, TMP1, TMP3);
+            if (shift != 0) {
+                a.sradi(quotient, quotient, imm(shift));
+            }
+            if (std::get<0>(getClampedRange(Dividend)) < 0) {
+                a.srdi(LR_TMP, TMP1, 63);
+                a.add(quotient, quotient, LR_TMP);
+            }
+        } else {
+            mov_imm(TMP2, divisor);
+            a.divd(quotient, TMP1, TMP2);
+        }
+        if (need_rem) {
+            if (Support::is_int_n<16>(divisor)) {
+                a.mulli(TMP3, quotient, imm(divisor));
+            } else {
+                mov_imm(TMP2, divisor);
+                a.mulld(TMP3, quotient, TMP2);
+            }
+            a.sub(remainder, TMP1, TMP3);
+        }
+
+        if (need_div) {
+            a.sldi(quotient, quotient, _TAG_IMMED1_SIZE);
+            a.ori(quotient, quotient, imm(_TAG_IMMED1_SMALL));
+        }
+        if (need_rem) {
+            a.sldi(remainder, remainder, _TAG_IMMED1_SIZE);
+            a.ori(remainder, remainder, imm(_TAG_IMMED1_SMALL));
+        }
+    }
+}
+
+void BeamModuleAssembler::emit_div_rem(const ArgLabel &Fail,
+                                       const ArgSource &LHS,
+                                       const ArgSource &RHS,
+                                       const ErtsCodeMFA *error_mfa,
+                                       const ArgRegister &Quotient,
+                                       const ArgRegister &Remainder,
+                                       bool need_div,
+                                       bool need_rem) {
+    Sint divisor = 0;
+
+    if (RHS.isSmall()) {
+        divisor = RHS.as<ArgSmall>().getSigned();
+        if (divisor == -1) {
+            divisor = 0;
+        }
+    }
+
+    if (always_small(LHS) && divisor != 0) {
+        auto lhs = load_source(LHS, ARG3);
+        auto quotient = init_destination(Quotient, ARG1);
+        auto remainder = init_destination(Remainder, ARG2);
+        Label invalidLabel; /* Intentionally not initialized */
+
+        comment("skipped test for smalls operands and overflow");
+        emit_div_rem_literal(divisor,
+                             LHS,
+                             lhs.reg,
+                             quotient.reg,
+                             remainder.reg,
+                             invalidLabel,
+                             need_div,
+                             need_rem);
+        if (need_div) {
+            flush_var(quotient);
+        }
+        if (need_rem) {
+            flush_var(remainder);
+        }
+    } else {
+        Label generic = a.new_label(), done = a.new_label();
+        auto [lhs, rhs] = load_sources(LHS, ARG2, RHS, ARG3);
+
+        if (divisor != (Sint)0) {
+            emit_div_rem_literal(divisor,
+                                 LHS,
+                                 lhs.reg,
+                                 ARG1,
+                                 ARG2,
+                                 generic,
+                                 need_div,
+                                 need_rem);
+            a.b(done);
+        }
+
+        a.bind(generic);
+        mov_var(ARG2, lhs);
+        mov_var(ARG3, rhs);
+        if (Fail.get() != 0) {
+            fragment_call(ga->get_int_div_rem_guard_shared());
+            a.beq(resolve_beam_label(Fail, disp32K));
+        } else {
+            mov_imm(ARG4, error_mfa);
+            fragment_call(ga->get_int_div_rem_body_shared());
+        }
+
+        a.bind(done);
+        if (need_div) {
+            mov_arg(Quotient, ARG1);
+        }
+        if (need_rem) {
+            mov_arg(Remainder, ARG2);
+        }
+    }
+}
+
+void BeamModuleAssembler::emit_i_rem_div(const ArgLabel &Fail,
+                                         const ArgWord &Live,
+                                         const ArgSource &LHS,
+                                         const ArgSource &RHS,
+                                         const ArgRegister &Remainder,
+                                         const ArgRegister &Quotient) {
+    static const ErtsCodeMFA bif_mfa = {am_erlang, am_rem, 2};
+    bool need_rem = Quotient != Remainder;
+
+    emit_div_rem(Fail, LHS, RHS, &bif_mfa, Quotient, Remainder, true, need_rem);
+}
+
+void BeamModuleAssembler::emit_i_div_rem(const ArgLabel &Fail,
+                                         const ArgWord &Live,
+                                         const ArgSource &LHS,
+                                         const ArgSource &RHS,
+                                         const ArgRegister &Quotient,
+                                         const ArgRegister &Remainder) {
+    static const ErtsCodeMFA bif_mfa = {am_erlang, am_div, 2};
+    bool need_div = Quotient != Remainder;
+
+    emit_div_rem(Fail, LHS, RHS, &bif_mfa, Quotient, Remainder, need_div, true);
+}
+
+void BeamModuleAssembler::emit_i_int_div(const ArgLabel &Fail,
+                                         const ArgWord &Live,
+                                         const ArgSource &LHS,
+                                         const ArgSource &RHS,
+                                         const ArgRegister &Quotient) {
+    static const ErtsCodeMFA bif_mfa = {am_erlang, am_div, 2};
+    ArgYRegister Dummy(0);
+
+    emit_div_rem(Fail, LHS, RHS, &bif_mfa, Quotient, Dummy, true, false);
+}
+
+void BeamModuleAssembler::emit_i_rem(const ArgLabel &Fail,
+                                     const ArgWord &Live,
+                                     const ArgSource &LHS,
+                                     const ArgSource &RHS,
+                                     const ArgRegister &Remainder) {
+    static const ErtsCodeMFA bif_mfa = {am_erlang, am_rem, 2};
+    ArgYRegister Dummy(0);
+
+    emit_div_rem(Fail, LHS, RHS, &bif_mfa, Dummy, Remainder, false, true);
+}
+
+void BeamModuleAssembler::emit_i_m_div(const ArgLabel &Fail,
+                                       const ArgWord &Live,
+                                       const ArgSource &LHS,
+                                       const ArgSource &RHS,
+                                       const ArgRegister &Dst) {
+    static const ErtsCodeMFA bif_mfa = {am_erlang, am_Div, 2};
+
+    Label next = a.new_label();
+
+    auto [lhs, rhs] = load_sources(LHS, ARG2, RHS, ARG3);
+
+    mov_var(ARG2, lhs);
+    mov_var(ARG3, rhs);
+
+    emit_enter_runtime(Live.get());
+
+    a.mr(ARG1, c_p);
+    runtime_call<Eterm (*)(Process *, Eterm, Eterm), erts_mixed_div>();
+
+    emit_leave_runtime(Live.get());
+
+    cmp(ARG1, THE_NON_VALUE);
+
+    if (Fail.get() != 0) {
+        a.beq(resolve_beam_label(Fail, disp32K));
+    } else {
+        a.bne(next);
+
+        mov_arg(XREG0, LHS);
+        mov_arg(XREG1, RHS);
+
+        emit_raise_exception(&bif_mfa);
+    }
+
+    a.bind(next);
+    mov_arg(Dst, ARG1);
+}
+
 void BeamGlobalAssembler::emit_i_band_body_shared() {
     static const ErtsCodeMFA bif_mfa = {am_erlang, am_band, 2};
     emit_bitwise_fallback_body<Eterm (*)(Process *, Eterm, Eterm), erts_band>(

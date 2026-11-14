@@ -1337,6 +1337,24 @@ protected:
                                   const ArgSource &Src,
                                   const ppc::Gp src_reg);
 
+    void emit_div_rem_literal(Sint divisor,
+                              const ArgSource &Dividend,
+                              ppc::Gp dividend,
+                              ppc::Gp quotient,
+                              ppc::Gp remainder,
+                              const Label &generic,
+                              bool need_div,
+                              bool need_rem);
+
+    void emit_div_rem(const ArgLabel &Fail,
+                      const ArgSource &LHS,
+                      const ArgSource &RHS,
+                      const ErtsCodeMFA *error_mfa,
+                      const ArgRegister &Quotient,
+                      const ArgRegister &Remainder,
+                      bool need_div,
+                      bool need_rem);
+
     void emit_are_both_small(const ArgSource &LHS,
                              const ppc::Gp lhs_reg,
                              const ArgSource &RHS,
