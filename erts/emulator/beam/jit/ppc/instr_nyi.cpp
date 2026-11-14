@@ -103,14 +103,6 @@ void BeamModuleAssembler::emit_get_record_field(const ArgLabel &,
     emit_nyi("get_record_field");
 }
 
-void BeamModuleAssembler::emit_i_bs_create_bin(const ArgLabel &,
-                                               const ArgWord &,
-                                               const ArgWord &,
-                                               const ArgRegister &,
-                                               const Span<const ArgVal> &) {
-    emit_nyi("i_bs_create_bin");
-}
-
 void BeamModuleAssembler::emit_i_bs_get_utf16(const ArgRegister &,
                                               const ArgLabel &,
                                               const ArgWord &,

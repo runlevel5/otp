@@ -1167,6 +1167,1086 @@ void BeamGlobalAssembler::emit_bs_init_bits_shared() {
     a.blr();
 }
 
+void BeamModuleAssembler::emit_i_bs_create_bin(const ArgLabel &Fail,
+                                               const ArgWord &Alloc,
+                                               const ArgWord &Live0,
+                                               const ArgRegister &Dst,
+                                               const Span<const ArgVal> &args) {
+    Uint num_bits = 0;
+    Uint estimated_num_bits = 0;
+    std::vector<BscSegment> segments;
+    Label error; /* Intentionally uninitialized */
+    ArgWord Live = Live0;
+    ppc::Gp sizeReg;
+    Sint allocated_size = -1;
+    bool need_error_handler = false;
+
+    segments = beam_jit_bsc_init(args);
+
+    for (auto &seg : segments) {
+        /*
+         * Test whether we can omit the code for the error handler.
+         */
+        switch (seg.type) {
+        case am_append:
+            if (!(exact_type<BeamTypeId::Bitstring>(seg.src) &&
+                  std::gcd(seg.unit, getSizeUnit(seg.src)) == seg.unit)) {
+                need_error_handler = true;
+            }
+            break;
+        case am_binary:
+            if (!(seg.size.isAtom() && seg.size.as<ArgAtom>().get() == am_all &&
+                  exact_type<BeamTypeId::Bitstring>(seg.src) &&
+                  std::gcd(seg.unit, getSizeUnit(seg.src)) == seg.unit)) {
+                need_error_handler = true;
+            }
+            break;
+        case am_integer:
+            if (!exact_type<BeamTypeId::Integer>(seg.src)) {
+                need_error_handler = true;
+            }
+            break;
+        case am_private_append:
+        case am_string:
+            break;
+        default:
+            need_error_handler = true;
+            break;
+        }
+
+        /*
+         * Attempt to calculate the effective size of this segment.
+         * Give up if variable or invalid.
+         */
+        if (seg.size.isSmall() && seg.unit != 0) {
+            Uint unsigned_size = seg.size.as<ArgSmall>().getUnsigned();
+
+            if ((unsigned_size >> (sizeof(Eterm) - 1) * 8) != 0) {
+                /* Suppress creation of heap bitstring. */
+                estimated_num_bits += ERL_ONHEAP_BITS_LIMIT + 8;
+            } else {
+                /* This multiplication cannot overflow. */
+                Uint seg_size = seg.unit * unsigned_size;
+                seg.effectiveSize = seg_size;
+                num_bits += seg_size;
+                estimated_num_bits += seg_size;
+            }
+        } else if (seg.unit > 0) {
+            if ((seg.unit % 8) == 0) {
+                auto max = std::min(std::get<1>(getClampedRange(seg.size)),
+                                    Sint(ERL_ONHEAP_BITS_LIMIT + 8));
+                estimated_num_bits += max * seg.unit;
+            } else {
+                /* May create a non-binary bitstring in some cases, suppress
+                 * creation of heap bitstring. */
+                estimated_num_bits += ERL_ONHEAP_BITS_LIMIT + 8;
+            }
+        } else {
+            switch (seg.type) {
+            case am_utf8:
+            case am_utf16:
+            case am_utf32:
+                estimated_num_bits += 32;
+                break;
+            default:
+                /* Suppress creation of heap bitstring. */
+                estimated_num_bits += ERL_ONHEAP_BITS_LIMIT + 8;
+                break;
+            }
+        }
+
+        if (seg.effectiveSize < 0 && seg.type != am_append &&
+            seg.type != am_private_append) {
+            /* At least one segment will need a dynamic size
+             * calculation. */
+            sizeReg = ARG8;
+            need_error_handler = true;
+        }
+    }
+
+    if (need_error_handler && Fail.get() != 0) {
+        error = resolve_beam_label(Fail, dispUnknown);
+    } else if (need_error_handler) {
+        Label past_error = a.new_label();
+
+        a.b(past_error);
+
+        error = a.new_label();
+        a.bind(error);
+        {
+            /*
+             * ARG1 = optional bad size value; valid if BSC_VALUE_ARG1 is set in
+             * ARG4
+             *
+             * ARG3 = optional bad size value; valid if BSC_VALUE_ARG3 is
+             * set in ARG4
+             *
+             * ARG4 = packed error information
+             */
+            comment("handle error");
+            fragment_call(ga->get_bs_create_bin_error_shared());
+            last_error_offset = a.offset();
+        }
+
+        a.bind(past_error);
+    } else {
+        comment("(cannot fail)");
+    }
+
+    /* We count the total number of bits in an unsigned integer. To
+     * avoid having to check for overflow when adding to the counter,
+     * we ensure that the signed size of each segment fits in a
+     * word. */
+    if (sizeReg.is_valid()) {
+        comment("calculate sizes");
+        mov_imm(sizeReg, num_bits);
+    }
+
+    /* Generate code for calculating the size of the binary to be
+     * created. */
+    for (auto seg : segments) {
+        if (seg.effectiveSize >= 0) {
+            continue;
+        }
+
+        if (seg.type == am_append || seg.type == am_private_append) {
+            continue;
+        }
+
+        if (seg.size.isAtom() && seg.size.as<ArgAtom>().get() == am_all &&
+            seg.type == am_binary) {
+            comment("size of an entire bitstring");
+
+            mov_arg(ARG1, seg.src);
+
+            if (!exact_type<BeamTypeId::Bitstring>(seg.src)) {
+                /* Note: ARG1 must remain equal to seg.src here for error
+                 * reporting to work. */
+                if (Fail.get() == 0) {
+                    mov_imm(ARG4,
+                            beam_jit_update_bsc_reason_info(seg.error_info,
+                                                            BSC_REASON_BADARG,
+                                                            BSC_INFO_TYPE,
+                                                            BSC_VALUE_ARG1));
+                }
+
+                emit_is_boxed(resolve_label(error, dispUnknown), seg.src, ARG1);
+            }
+
+            emit_untag_ptr(TMP4, ARG1);
+
+            a.ld(TMP1, ppc::Mem(TMP4, offsetof(ErlHeapBits, thing_word)));
+            a.ld(TMP2, ppc::Mem(TMP4, offsetof(ErlHeapBits, size)));
+
+            if (masked_types<BeamTypeId::MaybeBoxed>(seg.src) ==
+                BeamTypeId::Bitstring) {
+                comment("optimized size code because the value is always a "
+                        "bitstring when boxed");
+            } else {
+                const auto mask = _BITSTRING_TAG_MASK & ~_TAG_PRIMARY_MASK;
+                ERTS_CT_ASSERT(TAG_PRIMARY_HEADER == 0);
+                ERTS_CT_ASSERT(_TAG_HEADER_HEAP_BITS ==
+                               (_TAG_HEADER_HEAP_BITS & mask));
+
+                a.andi_rc(TMP3, TMP1, imm(mask));
+                a.cmpdi(TMP3, imm(_TAG_HEADER_HEAP_BITS));
+                a.bne(resolve_label(error, disp32K));
+            }
+
+            Label not_sub_bits = a.new_label();
+            cmp(TMP1, HEADER_SUB_BITS);
+            a.bne(not_sub_bits);
+            {
+                a.ld(TMP2, ppc::Mem(TMP4, offsetof(ErlSubBits, start)));
+                a.ld(TMP3, ppc::Mem(TMP4, offsetof(ErlSubBits, end)));
+                a.sub(TMP2, TMP3, TMP2);
+            }
+            a.bind(not_sub_bits);
+
+            a.add(sizeReg, sizeReg, TMP2);
+        } else if (seg.unit != 0) {
+            bool can_fail = true;
+            comment("size binary/integer/float/string");
+
+            if (always_small(seg.size)) {
+                auto min = std::get<0>(getClampedRange(seg.size));
+                if (min >= 0) {
+                    can_fail = false;
+                }
+            }
+
+            mov_arg(ARG3, seg.size);
+
+            if (can_fail && Fail.get() == 0) {
+                mov_imm(ARG4,
+                        beam_jit_update_bsc_reason_info(seg.error_info,
+                                                        BSC_REASON_DEPENDS,
+                                                        BSC_INFO_SIZE,
+                                                        BSC_VALUE_ARG3));
+            }
+
+            if (always_small(seg.size)) {
+                comment("skipped test for small size since it is always small");
+            } else if (always_one_of<BeamTypeId::Number>(seg.size)) {
+                comment("simplified test for small size since it is a number");
+                emit_is_not_boxed(resolve_label(error, dispUnknown), ARG3);
+            } else {
+                a.andi_rc(TMP2, ARG3, imm(_TAG_IMMED1_MASK));
+                a.cmpdi(TMP2, imm(_TAG_IMMED1_SMALL));
+                a.bne(resolve_label(error, disp32K));
+            }
+            if (can_fail) {
+                a.cmpdi(ARG3, imm(0));
+                a.blt(resolve_label(error, disp32K));
+            }
+            a.sradi(TMP1, ARG3, imm(_TAG_IMMED1_SIZE));
+            if (seg.unit == 1) {
+                a.add(sizeReg, sizeReg, TMP1);
+            } else {
+                if (Fail.get() == 0) {
+                    mov_imm(ARG4,
+                            beam_jit_update_bsc_reason_info(
+                                    seg.error_info,
+                                    BSC_REASON_SYSTEM_LIMIT,
+                                    BSC_INFO_SIZE,
+                                    BSC_VALUE_ARG3));
+                }
+                /* Test the 12 bits starting at bit number
+                 * SMALL_BITS - ERL_UNIT_BITS by rotating them down to
+                 * the least significant bits. */
+                a.rldicl_rc(LR_TMP,
+                            TMP1,
+                            imm(64 - (SMALL_BITS - ERL_UNIT_BITS)),
+                            imm(64 - 12));
+                a.bne(resolve_label(error, disp32K));
+                if (Support::is_int_n<16>(seg.unit)) {
+                    a.mulli(TMP1, TMP1, imm(seg.unit));
+                } else {
+                    mov_imm(TMP2, seg.unit);
+                    a.mulld(TMP1, TMP1, TMP2);
+                }
+                a.add(sizeReg, sizeReg, TMP1);
+            }
+        } else {
+            switch (seg.type) {
+            case am_utf8: {
+                comment("size utf8");
+                Label next = a.new_label();
+
+                mov_arg(ARG3, seg.src);
+
+                if (Fail.get() == 0) {
+                    mov_imm(ARG4,
+                            beam_jit_update_bsc_reason_info(seg.error_info,
+                                                            BSC_REASON_BADARG,
+                                                            BSC_INFO_TYPE,
+                                                            BSC_VALUE_ARG3));
+                }
+
+                if (always_small(seg.src)) {
+                    comment("skipped test for small value since it is always "
+                            "small");
+                } else if (always_one_of<BeamTypeId::Integer,
+                                         BeamTypeId::AlwaysBoxed>(seg.src)) {
+                    comment("simplified test for small operand since other "
+                            "types are boxed");
+                    emit_is_not_boxed(resolve_label(error, dispUnknown), ARG3);
+                } else {
+                    a.andi_rc(TMP1, ARG3, imm(_TAG_IMMED1_MASK));
+                    a.cmpdi(TMP1, imm(_TAG_IMMED1_SMALL));
+                    a.bne(resolve_label(error, disp32K));
+                }
+
+                a.sradi(TMP1, ARG3, imm(_TAG_IMMED1_SIZE));
+                mov_imm(TMP2, 1);
+                a.cmpldi(TMP1, imm(0x7F));
+                a.ble(next);
+
+                mov_imm(TMP2, 2);
+                a.cmpldi(TMP1, imm(0x7FFUL));
+                a.ble(next);
+
+                /* Ensure that the value is not in the invalid range
+                 * 0xD800 through 0xDFFF. */
+                a.srdi(TMP3, TMP1, 11);
+                a.cmpdi(TMP3, imm(0x1b));
+                a.beq(resolve_label(error, disp32K));
+
+                /* Three bytes, or four if the value is 0x10000 or
+                 * greater. Subtracting one from a non-zero value
+                 * sets the carry. */
+                a.srdi(TMP3, TMP1, 16);
+                a.addic(LR_TMP, TMP3, imm(-1));
+                mov_imm(TMP2, 3);
+                a.addze(TMP2, TMP2);
+
+                auto [min, max] = getClampedRange(seg.src);
+                if (0 <= min && max < 0x110000) {
+                    comment("skipped range check for unicode code point");
+                } else {
+                    a.cmpldi(TMP3, imm(0x110000 >> 16));
+                    a.bge(resolve_label(error, disp32K));
+                }
+
+                a.bind(next);
+                a.sldi(TMP2, TMP2, 3);
+                a.add(sizeReg, sizeReg, TMP2);
+                break;
+            }
+            case am_utf16: {
+                /* erts_bs_put_utf16 errors out whenever something's
+                 * fishy, so we can return garbage (16 or 32) if our
+                 * input is not a small. */
+                comment("size utf16");
+                auto src_reg = load_source(seg.src, TMP1);
+
+                /* One 16-bit unit, or two if the value is 0x10000 or
+                 * greater. Subtracting one from a non-zero value sets
+                 * the carry. */
+                a.sradi(TMP1, src_reg.reg, imm(_TAG_IMMED1_SIZE + 16));
+                a.addic(LR_TMP, TMP1, imm(-1));
+                mov_imm(TMP2, 1);
+                a.addze(TMP2, TMP2);
+                a.sldi(TMP2, TMP2, 4);
+                a.add(sizeReg, sizeReg, TMP2);
+                break;
+            }
+            case am_utf32: {
+                Label next = a.new_label();
+
+                comment("size utf32");
+                mov_arg(ARG3, seg.src);
+
+                if (Fail.get() == 0) {
+                    mov_imm(ARG4,
+                            beam_jit_update_bsc_reason_info(seg.error_info,
+                                                            BSC_REASON_BADARG,
+                                                            BSC_INFO_TYPE,
+                                                            BSC_VALUE_ARG3));
+                }
+
+                a.addi(sizeReg, sizeReg, imm(4 * 8));
+
+                a.andi_rc(TMP2, ARG3, imm(_TAG_IMMED1_MASK));
+                a.cmpdi(TMP2, imm(_TAG_IMMED1_SMALL));
+                a.bne(resolve_label(error, disp32K));
+
+                cmpl(ARG3, make_small(0xD800UL));
+                a.blt(next);
+
+                cmpl(ARG3, make_small(0xDFFFUL));
+                a.ble(resolve_label(error, disp32K));
+
+                cmpl(ARG3, make_small(0x10FFFFUL));
+                a.bgt(resolve_label(error, disp32K));
+
+                a.bind(next);
+                break;
+            }
+            default:
+                ASSERT(0);
+                break;
+            }
+        }
+
+        check_pending_stubs();
+    }
+
+    /* Allocate the binary. */
+    if (segments[0].type == am_append) {
+        BscSegment seg = segments[0];
+        Label schedule = resolve_fragment(ga->get_do_schedule(), dispUnknown);
+
+        comment("append to binary");
+        mov_arg(ARG3, Live);
+        if (sizeReg.is_valid()) {
+            a.mr(ARG4, sizeReg);
+        } else {
+            mov_imm(ARG4, num_bits);
+        }
+        mov_arg(ARG5, Alloc);
+        mov_imm(ARG6, seg.unit);
+        mov_arg(ArgXRegister(Live.get()), seg.src);
+        a.mr(ARG1, c_p);
+        load_x_reg_array(ARG2);
+
+        emit_enter_runtime<Update::eHeapAlloc | Update::eXRegs |
+                           Update::eReductions>(Live.get() + 1);
+        runtime_call<Eterm (*)(Process *, Eterm *, Uint, Uint, Uint, Uint),
+                     erts_bs_append_checked>();
+        emit_leave_runtime<Update::eHeapAlloc | Update::eXRegs |
+                           Update::eReductions>(Live.get() + 1);
+
+        if (exact_type<BeamTypeId::Bitstring>(seg.src) &&
+            std::gcd(seg.unit, getSizeUnit(seg.src)) == seg.unit) {
+            /* There is no way the call can fail with a system_limit
+             * exception on a 64-bit architecture. However, it can
+             * fail because the max_heap_size limit has been
+             * exceeded. */
+            comment("skipped test for success because units are compatible");
+            emit_branch_if_not_value(ARG1, schedule);
+        } else {
+            Label all_good = a.new_label();
+
+            emit_branch_if_value(ARG1, all_good);
+
+            if (Fail.get() == 0) {
+                mov_arg(ARG3, ArgXRegister(Live.get()));
+                mov_imm(ARG4,
+                        beam_jit_update_bsc_reason_info(seg.error_info,
+                                                        BSC_REASON_BADARG,
+                                                        BSC_INFO_FVALUE,
+                                                        BSC_VALUE_ARG3));
+            }
+
+            /* Test whether the max_heap_size limit has been exceeded. */
+            ERTS_CT_ASSERT(Support::is_uint_n<16>(ERTS_PSFLG_EXITING));
+            a.lwz(TMP1, ppc::Mem(c_p, offsetof(Process, state.value)));
+            a.andi_rc(LR_TMP, TMP1, imm(ERTS_PSFLG_EXITING));
+            a.beq(resolve_label(error, disp32K));
+            a.b(resolve_fragment(ga->get_do_schedule(), disp32MB));
+
+            a.bind(all_good);
+        }
+    } else if (segments[0].type == am_private_append) {
+        BscSegment seg = segments[0];
+        comment("private append to binary");
+        ASSERT(Alloc.get() == 0);
+        load_erl_bits_state(ARG1);
+        a.mr(ARG2, c_p);
+        mov_arg(ARG3, seg.src);
+        if (sizeReg.is_valid()) {
+            a.mr(ARG4, sizeReg);
+        } else {
+            mov_imm(ARG4, num_bits);
+        }
+        emit_enter_runtime(Live.get());
+        runtime_call<Eterm (*)(ErlBitsState *, Process *, Eterm, Uint),
+                     erts_bs_private_append_checked>();
+        emit_leave_runtime(Live.get());
+        /* There is no way the call can fail on a 64-bit architecture. */
+    } else if (estimated_num_bits <= ERL_ONHEAP_BITS_LIMIT) {
+        static constexpr auto cur_bin_offset =
+                offsetof(ErtsSchedulerRegisters,
+                         aux_regs.d.erl_bits_state.erts_current_bin);
+        Uint need;
+
+        ppc::Mem mem_bin_base = ppc::Mem(scheduler_registers, cur_bin_offset);
+        ppc::Mem mem_bin_offset =
+                ppc::Mem(scheduler_registers,
+                         offsetof(ErtsSchedulerRegisters,
+                                  aux_regs.d.erl_bits_state.erts_bin_offset));
+
+        if (sizeReg.is_valid()) {
+            Label after_gc_check = a.new_label();
+
+            comment("allocate heap bitstring of dynamic size (=< %ld bits)",
+                    estimated_num_bits);
+
+            /* Calculate number of bits to allocate, rounded up to term
+             * alignment as it'll be allocated on the process heap. */
+            need = (heap_bits_size(0) + Alloc.get() + S_RESERVED);
+            a.addi(TMP3, sizeReg, imm(sizeof(Eterm) * 8 - 1));
+            a.clrrdi(TMP3, TMP3, _HEADER_ARITY_OFFS);
+            add(TMP1, TMP3, need * sizeof(Eterm) * 8);
+
+            /* Do a GC test. Note that TMP1 is in bits. */
+            a.srdi(TMP1, TMP1, 3);
+            a.add(ARG3, HTOP, TMP1);
+            a.cmpld(ARG3, E);
+            a.ble(after_gc_check);
+
+            a.std(sizeReg, TMP_MEM1q);
+            a.std(TMP3, TMP_MEM2q);
+
+            mov_imm(ARG4, Live.get());
+            fragment_call(ga->get_garbage_collect());
+
+            a.ld(sizeReg, TMP_MEM1q);
+            a.ld(TMP3, TMP_MEM2q);
+
+            a.bind(after_gc_check);
+
+            /* As TMP3 is the number of bits rounded up to term alignment,
+             * the 6 lowest bits will be clear, and since _HEADER_ARITY_OFFS
+             * happens to be 6 bits, simply adding the header constant is
+             * enough to build the header word. */
+            ERTS_CT_ASSERT(sizeof(Eterm) * 8 == (1 << _HEADER_ARITY_OFFS));
+            add(TMP1, TMP3, header_heap_bits(0));
+
+            /* Create the heap bitstring. */
+            a.addi(ARG1, HTOP, imm(TAG_PRIMARY_BOXED));
+            a.std(TMP1, ppc::Mem(HTOP, offsetof(ErlHeapBits, thing_word)));
+            a.std(sizeReg, ppc::Mem(HTOP, offsetof(ErlHeapBits, size)));
+            a.addi(HTOP, HTOP, imm(sizeof(Eterm[2])));
+
+            /* Initialize the erl_bin_state struct. */
+            a.li(LR_TMP, imm(0));
+            store_mem(HTOP, mem_bin_base);
+            store_mem(LR_TMP, mem_bin_offset);
+
+            /* Update HTOP, note that TMP3 is in bits. */
+            a.srdi(TMP3, TMP3, 3);
+            a.add(HTOP, HTOP, TMP3);
+        } else {
+            Uint heap_size = heap_bits_size(num_bits);
+
+            comment("allocate heap bitstring of static size");
+            ERTS_CT_ASSERT(offsetof(ErlHeapBits, data) ==
+                           (heap_bits_size(0) * sizeof(Eterm)));
+            allocated_size = (heap_size - heap_bits_size(0)) * sizeof(Eterm);
+
+            /* Ensure that there is sufficient room on the heap. */
+            emit_gc_test(ArgWord(0), ArgWord(heap_size + Alloc.get()), Live);
+
+            mov_imm(TMP1, header_heap_bits(num_bits));
+            mov_imm(TMP2, num_bits);
+
+            /* Create the heap bitstring. */
+            a.addi(ARG1, HTOP, imm(TAG_PRIMARY_BOXED));
+            a.std(TMP1, ppc::Mem(HTOP, offsetof(ErlHeapBits, thing_word)));
+            a.std(TMP2, ppc::Mem(HTOP, offsetof(ErlHeapBits, size)));
+            a.addi(HTOP, HTOP, imm(sizeof(Eterm[2])));
+
+            /* Initialize the erl_bin_state struct. */
+            a.li(LR_TMP, imm(0));
+            store_mem(HTOP, mem_bin_base);
+            store_mem(LR_TMP, mem_bin_offset);
+
+            /* Update HTOP. */
+            add(HTOP, HTOP, allocated_size);
+        }
+    } else {
+        comment("allocate binary");
+        if (sizeReg.is_valid()) {
+            comment("(size in bits)");
+            a.mr(ARG4, sizeReg);
+        } else {
+            allocated_size = NBYTES(num_bits);
+            if (num_bits <= ERL_ONHEAP_BITS_LIMIT) {
+                /* On-heap bitstring allocations are rounded up to multiples of
+                 * sizeof(Eterm). */
+                allocated_size = (allocated_size + (sizeof(Eterm) - 1)) &
+                                 ~((sizeof(Eterm) - 1));
+            }
+            mov_imm(ARG4, num_bits);
+        }
+        mov_arg(ARG5, Alloc);
+        mov_arg(ARG6, Live);
+        fragment_call(ga->get_bs_init_bits_shared());
+    }
+    a.std(ARG1, TMP_MEM1q);
+
+    segments = beam_jit_bsc_combine_segments(segments);
+
+    /* Keep track of the bit offset from the being of the binary.
+     * Set to -1 if offset is not known (when a segment of unknown
+     * size has been seen). */
+    Sint bit_offset = 0;
+
+    /* Keep track of whether the current segment is byte-aligned.  (A
+     * segment can be known to be byte-aligned even if the bit offset
+     * is unknown.) */
+    bool is_byte_aligned = true;
+
+    /* Build each segment of the binary. */
+    for (auto seg : segments) {
+        switch (seg.type) {
+        case am_append:
+        case am_private_append:
+            bit_offset = -1;
+            break;
+        case am_binary: {
+            Uint error_info;
+            bool can_fail = true;
+
+            comment("construct a binary segment");
+            if (seg.effectiveSize >= 0) {
+                /* The segment has a literal size. */
+                load_erl_bits_state(ARG1);
+                a.mr(ARG2, c_p);
+                mov_arg(ARG3, seg.src);
+                mov_imm(ARG4, seg.effectiveSize);
+                emit_enter_runtime<Update::eReductions>(Live.get());
+                runtime_call<int (*)(ErlBitsState *, Process *, Eterm, Uint),
+                             erts_bs_put_binary>();
+                emit_leave_runtime<Update::eReductions>(Live.get());
+                error_info = beam_jit_update_bsc_reason_info(seg.error_info,
+                                                             BSC_REASON_BADARG,
+                                                             BSC_INFO_DEPENDS,
+                                                             BSC_VALUE_FVALUE);
+            } else if (seg.size.isAtom() &&
+                       seg.size.as<ArgAtom>().get() == am_all) {
+                /* Include the entire binary/bitstring in the
+                 * resulting binary. */
+
+                can_fail =
+                        !(exact_type<BeamTypeId::Bitstring>(seg.src) &&
+                          std::gcd(seg.unit, getSizeUnit(seg.src)) == seg.unit);
+
+                load_erl_bits_state(ARG1);
+                a.mr(ARG2, c_p);
+                mov_arg(ARG3, seg.src);
+
+                emit_enter_runtime<Update::eReductions>(Live.get());
+                if (can_fail) {
+                    mov_imm(ARG4, seg.unit);
+                    runtime_call<
+                            int (*)(ErlBitsState *, Process *, Eterm, Uint),
+                            erts_bs_put_binary_all>();
+                } else {
+                    runtime_call<void (*)(ErlBitsState *, Process *, Eterm),
+                                 beam_jit_bs_put_binary_all>();
+                }
+                emit_leave_runtime<Update::eReductions>(Live.get());
+
+                error_info = beam_jit_update_bsc_reason_info(seg.error_info,
+                                                             BSC_REASON_BADARG,
+                                                             BSC_INFO_UNIT,
+                                                             BSC_VALUE_FVALUE);
+            } else {
+                /* The size is a variable. We have verified that
+                 * the value is a non-negative small in the
+                 * appropriate range. Multiply the size with the
+                 * unit. */
+                auto r = load_source(seg.size, ARG4);
+                a.sradi(ARG4, r.reg, imm(_TAG_IMMED1_SIZE));
+                if (seg.unit != 1) {
+                    mov_imm(TMP1, seg.unit);
+                    a.mulld(ARG4, ARG4, TMP1);
+                }
+                load_erl_bits_state(ARG1);
+                a.mr(ARG2, c_p);
+                mov_arg(ARG3, seg.src);
+
+                emit_enter_runtime<Update::eReductions>(Live.get());
+                runtime_call<int (*)(ErlBitsState *, Process *, Eterm, Uint),
+                             erts_bs_put_binary>();
+                emit_leave_runtime<Update::eReductions>(Live.get());
+
+                error_info = beam_jit_update_bsc_reason_info(seg.error_info,
+                                                             BSC_REASON_BADARG,
+                                                             BSC_INFO_DEPENDS,
+                                                             BSC_VALUE_FVALUE);
+            }
+
+            if (can_fail) {
+                if (Fail.get() == 0) {
+                    mov_imm(ARG4, error_info);
+                }
+                /* Note: The functions return int, not Sint. */
+                a.cmpwi(ARG1, imm(0));
+                a.beq(resolve_label(error, disp32K));
+            } else {
+                comment("skipped test for success because units are "
+                        "compatible");
+            }
+            break;
+        }
+        case am_float:
+            comment("construct float segment");
+            if (seg.effectiveSize >= 0) {
+                mov_imm(ARG4, seg.effectiveSize);
+            } else {
+                auto r = load_source(seg.size, ARG4);
+                a.sradi(ARG4, r.reg, imm(_TAG_IMMED1_SIZE));
+                if (seg.unit != 1) {
+                    mov_imm(TMP1, seg.unit);
+                    a.mulld(ARG4, ARG4, TMP1);
+                }
+            }
+            load_erl_bits_state(ARG1);
+            a.mr(ARG2, c_p);
+            mov_arg(ARG3, seg.src);
+            mov_imm(ARG5, seg.flags);
+
+            emit_enter_runtime(Live.get());
+            runtime_call<Eterm (*)(ErlBitsState *, Process *, Eterm, Uint, int),
+                         erts_bs_put_float>();
+            emit_leave_runtime(Live.get());
+
+            if (Fail.get() == 0) {
+                mov_imm(ARG4,
+                        beam_jit_update_bsc_reason_info(seg.error_info,
+                                                        BSC_REASON_BADARG,
+                                                        BSC_INFO_FVALUE,
+                                                        BSC_VALUE_ARG1));
+            }
+            emit_branch_if_value(ARG1, resolve_label(error, dispUnknown));
+            break;
+        case am_integer:
+            switch (seg.action) {
+            case BscSegment::action::ACCUMULATE_FIRST:
+            case BscSegment::action::ACCUMULATE: {
+                /* Shift an integer of known size (no more than 64 bits)
+                 * into a word-size accumulator. */
+                Label value_is_small = a.new_label();
+                Label done = a.new_label();
+                auto offset = seg.offsetInAccumulator;
+
+                comment("accumulate value for integer segment at offset %ld",
+                        offset);
+
+                auto src = load_source(seg.src, ARG1);
+
+                if (!always_small(seg.src)) {
+                    if (always_one_of<BeamTypeId::Integer,
+                                      BeamTypeId::AlwaysBoxed>(seg.src)) {
+                        comment("simplified small test since all other types "
+                                "are boxed");
+                        emit_is_boxed(value_is_small, seg.src, src.reg);
+                    } else {
+                        a.andi_rc(TMP1, src.reg, imm(_TAG_IMMED1_MASK));
+                        a.cmpdi(TMP1, imm(_TAG_IMMED1_SMALL));
+                        a.beq(value_is_small);
+                    }
+
+                    /* The value is boxed. If it is a bignum, extract the
+                     * least significant 64 bits. */
+                    mov_var(ARG1, src);
+                    fragment_call(ga->get_get_sint64_shared());
+                    /* Neither of these change CR0. */
+                    if (seg.effectiveSize == 64) {
+                        a.mr(ARG8, ARG1);
+                    } else {
+                        a.rldimi(ARG8,
+                                 ARG1,
+                                 imm(offset),
+                                 imm(64 - offset - seg.effectiveSize));
+                    }
+
+                    if (exact_type<BeamTypeId::Integer>(seg.src)) {
+                        a.b(done);
+                    } else {
+                        a.bne(done);
+
+                        /* Not a bignum. Signal error. */
+                        if (Fail.get() == 0) {
+                            mov_imm(ARG4,
+                                    beam_jit_update_bsc_reason_info(
+                                            seg.error_info,
+                                            BSC_REASON_BADARG,
+                                            BSC_INFO_TYPE,
+                                            BSC_VALUE_ARG1));
+                        }
+                        a.b(resolve_label(error, disp32MB));
+                    }
+                }
+
+                a.bind(value_is_small);
+                if (seg.effectiveSize == 64) {
+                    a.sradi(ARG8, src.reg, imm(_TAG_IMMED1_SIZE));
+                } else if (offset >= _TAG_IMMED1_SIZE) {
+                    /* Insert the value together with its tag bits. The
+                     * tag bits end up below the segment, where they will
+                     * be overwritten or ignored. */
+                    a.rldimi(ARG8,
+                             src.reg,
+                             imm(offset - _TAG_IMMED1_SIZE),
+                             imm(64 - offset - seg.effectiveSize));
+                } else {
+                    a.sradi(TMP1, src.reg, imm(_TAG_IMMED1_SIZE));
+                    a.rldimi(ARG8,
+                             TMP1,
+                             imm(offset),
+                             imm(64 - offset - seg.effectiveSize));
+                }
+
+                a.bind(done);
+                break;
+            }
+            case BscSegment::action::STORE: {
+                /* The accumulator is now full or the next segment is
+                 * not possible to accumulate, so it's time to store
+                 * the accumulator to the current position in the
+                 * binary. */
+                Label store = a.new_label();
+                Label done = a.new_label();
+
+                comment("construct integer segment from accumulator");
+
+                /* The accumulator holds the segment as a stream of bits
+                 * that starts at its most significant bit. That is the
+                 * way big-endian segments are stored, while
+                 * little-endian segments need to be right-aligned with
+                 * the bits of any partial byte moved to the top of
+                 * that byte. */
+                ASSERT(seg.effectiveSize >= 0);
+                const bool is_little = (seg.flags & BSF_LITTLE) != 0;
+
+                if (is_little) {
+                    Uint complete_bytes = 8 * (seg.effectiveSize / 8);
+                    Uint num_partial = seg.effectiveSize % 8;
+
+                    if (seg.effectiveSize < 64) {
+                        a.srdi(ARG8, ARG8, 64 - seg.effectiveSize);
+                    }
+
+                    if ((seg.effectiveSize % 8) != 0) {
+                        Uint position = complete_bytes + 8 - num_partial;
+
+                        a.rldicl(TMP1,
+                                 ARG8,
+                                 imm((64 - complete_bytes) & 63),
+                                 imm(64 - num_partial));
+                        a.rldimi(ARG8,
+                                 TMP1,
+                                 imm(position),
+                                 imm(64 - position - num_partial));
+                    }
+                }
+
+                ppc::Gp bin_offset = ARG3;
+                ppc::Gp bin_data = ARG8;
+
+                update_bin_state(bin_offset,
+                                 bit_offset,
+                                 seg.effectiveSize,
+                                 ppc::Gp());
+
+                if (!is_byte_aligned) {
+                    if (bit_offset < 0) {
+                        /* Bit offset is unknown. Must test alignment. */
+                        a.andi_rc(bin_offset, bin_offset, imm(7));
+                        a.beq(store);
+                    } else if (bit_offset >= 0) {
+                        /* Alignment is known to be unaligned. */
+                        mov_imm(bin_offset, bit_offset & 7);
+                    }
+
+                    if (is_little) {
+                        /* The fragment expects a stream of bits, which
+                         * we get by reversing the bytes. There is no
+                         * instruction for that, so do it by storing
+                         * the bytes reversed and loading them back. */
+                        lea(TMP2, TMP_MEM2q);
+                        a.li(LR_TMP, imm(0));
+                        a.stdbrx(bin_data, ppc::Mem(TMP2, LR_TMP));
+                        a.ld(bin_data, ppc::Mem(TMP2));
+                    }
+
+                    /* Bit offset is tested or known to be unaligned. */
+                    mov_imm(ARG4, seg.effectiveSize);
+                    fragment_call(ga->get_store_unaligned());
+
+                    if (bit_offset < 0) {
+                        /* The bit offset is unknown, which implies that
+                         * there exists store code that we will need to
+                         * branch past. */
+                        a.b(done);
+                    }
+                }
+
+                a.bind(store);
+
+                if (bit_offset < 0 || is_byte_aligned) {
+                    /* Bit offset is tested or known to be
+                     * byte-aligned. Emit inline code to store the
+                     * value of the accumulator into the binary. */
+                    int num_bytes = (seg.effectiveSize + 7) / 8;
+
+                    /* If more than one instruction is required for
+                     * doing the store, test whether it would be safe
+                     * to do a single 32 or 64 bit store. */
+                    switch (num_bytes) {
+                    case 3:
+                        if (bit_offset >= 0 &&
+                            allocated_size * 8 - bit_offset >= 32) {
+                            comment("simplified complicated store");
+                            num_bytes = 4;
+                        }
+                        break;
+                    case 5:
+                    case 6:
+                    case 7:
+                        if (bit_offset >= 0 &&
+                            allocated_size * 8 - bit_offset >= 64) {
+                            comment("simplified complicated store");
+                            num_bytes = 8;
+                        }
+                        break;
+                    }
+
+                    emit_store_bytes(bin_data, !is_little, TMP1, 0, num_bytes);
+                }
+
+                a.bind(done);
+                break;
+            }
+            case BscSegment::action::DIRECT:
+                /* This segment either has a size exceeding the maximum
+                 * accumulator size of 64 bits or has a variable size.
+                 *
+                 * First load the effective size (size * unit) into ARG3.
+                 */
+                comment("construct integer segment");
+                if (seg.effectiveSize >= 0) {
+                    mov_imm(ARG3, seg.effectiveSize);
+                } else {
+                    auto size = load_source(seg.size, TMP1);
+                    a.srdi(ARG3, size.reg, _TAG_IMMED1_SIZE);
+                    if (Support::is_power_of_2(seg.unit)) {
+                        Uint trailing_bits = Support::ctz<Eterm>(seg.unit);
+                        if (trailing_bits) {
+                            a.sldi(ARG3, ARG3, trailing_bits);
+                        }
+                    } else {
+                        mov_imm(TMP1, seg.unit);
+                        a.mulld(ARG3, ARG3, TMP1);
+                    }
+                }
+
+                if (is_byte_aligned && seg.src.isSmall() &&
+                    seg.src.as<ArgSmall>().getSigned() == 0) {
+                    /* Optimize the special case of setting a known
+                     * byte-aligned segment to zero. */
+                    comment("optimized setting segment to 0");
+                    set_zero(seg.effectiveSize);
+                } else {
+                    /* Call the helper function to fetch and store the
+                     * integer into the binary. */
+                    load_erl_bits_state(ARG1);
+                    mov_arg(ARG2, seg.src);
+
+                    emit_enter_runtime(Live.get());
+                    if (seg.flags & BSF_LITTLE) {
+                        runtime_call<int (*)(ErlBitsState *, Eterm, Uint),
+                                     erts_bs_put_integer_le>();
+                    } else {
+                        runtime_call<int (*)(ErlBitsState *, Eterm, Uint),
+                                     erts_bs_put_integer_be>();
+                    }
+                    emit_leave_runtime(Live.get());
+
+                    if (exact_type<BeamTypeId::Integer>(seg.src)) {
+                        comment("skipped test for success because construction "
+                                "can't fail");
+                    } else {
+                        if (Fail.get() == 0) {
+                            mov_arg(ARG3, seg.src);
+                            mov_imm(ARG4,
+                                    beam_jit_update_bsc_reason_info(
+                                            seg.error_info,
+                                            BSC_REASON_BADARG,
+                                            BSC_INFO_TYPE,
+                                            BSC_VALUE_ARG3));
+                        }
+                        /* Note: The functions return int, not Sint. */
+                        a.cmpwi(ARG1, imm(0));
+                        a.beq(resolve_label(error, disp32K));
+                    }
+                }
+            }
+            break;
+        case am_string: {
+            ArgBytePtr string_ptr(
+                    ArgVal(ArgVal::Type::BytePtr, seg.src.as<ArgWord>().get()));
+
+            comment("insert string");
+            ASSERT(seg.effectiveSize >= 0);
+            load_erl_bits_state(ARG1);
+            mov_arg(ARG2, string_ptr);
+            mov_imm(ARG3, seg.effectiveSize / 8);
+
+            emit_enter_runtime(Live.get());
+            runtime_call<void (*)(ErlBitsState *, byte *, Uint),
+                         erts_bs_put_string>();
+            emit_leave_runtime(Live.get());
+            break;
+        }
+        case am_utf8: {
+            emit_construct_utf8(seg.src, bit_offset, is_byte_aligned);
+            break;
+        }
+        case am_utf16:
+            comment("construct utf16 segment");
+            mov_arg(ARG2, seg.src);
+            mov_imm(ARG3, seg.flags);
+            load_erl_bits_state(ARG1);
+
+            emit_enter_runtime(Live.get());
+            runtime_call<int (*)(struct erl_bits_state *, Eterm, Uint),
+                         erts_bs_put_utf16>();
+            emit_leave_runtime(Live.get());
+
+            if (Fail.get() == 0) {
+                mov_arg(ARG3, seg.src);
+                mov_imm(ARG4,
+                        beam_jit_update_bsc_reason_info(seg.error_info,
+                                                        BSC_REASON_BADARG,
+                                                        BSC_INFO_TYPE,
+                                                        BSC_VALUE_ARG3));
+            }
+            /* Note: The functions return int, not Sint. */
+            a.cmpwi(ARG1, imm(0));
+            a.beq(resolve_label(error, disp32K));
+            break;
+        case am_utf32:
+            load_erl_bits_state(ARG1);
+            mov_arg(ARG2, seg.src);
+            mov_imm(ARG3, 4 * 8);
+
+            emit_enter_runtime(Live.get());
+            if (seg.flags & BSF_LITTLE) {
+                runtime_call<int (*)(ErlBitsState *, Eterm, Uint),
+                             erts_bs_put_integer_le>();
+            } else {
+                runtime_call<int (*)(ErlBitsState *, Eterm, Uint),
+                             erts_bs_put_integer_be>();
+            }
+            emit_leave_runtime(Live.get());
+
+            if (Fail.get() == 0) {
+                mov_arg(ARG3, seg.src);
+                mov_imm(ARG4,
+                        beam_jit_update_bsc_reason_info(seg.error_info,
+                                                        BSC_REASON_BADARG,
+                                                        BSC_INFO_TYPE,
+                                                        BSC_VALUE_ARG3));
+            }
+            /* Note: The functions return int, not Sint. */
+            a.cmpwi(ARG1, imm(0));
+            a.beq(resolve_label(error, disp32K));
+            break;
+        default:
+            ASSERT(0);
+            break;
+        }
+
+        /* Try to keep track of the bit offset. */
+        if (bit_offset >= 0 && (seg.action == BscSegment::action::DIRECT ||
+                                seg.action == BscSegment::action::STORE)) {
+            if (seg.effectiveSize >= 0) {
+                bit_offset += seg.effectiveSize;
+            } else {
+                bit_offset = -1;
+            }
+        }
+
+        /* Try to keep track whether the next segment is byte
+         * aligned. */
+        if (seg.type == am_append || seg.type == am_private_append) {
+            if (!exact_type<BeamTypeId::Bitstring>(seg.src) ||
+                std::gcd(getSizeUnit(seg.src), 8) != 8) {
+                is_byte_aligned = false;
+            }
+        } else if (bit_offset % 8 == 0) {
+            is_byte_aligned = true;
+        } else if (seg.effectiveSize >= 0) {
+            if (seg.effectiveSize % 8 != 0) {
+                is_byte_aligned = false;
+            }
+        } else if (std::gcd(seg.unit, 8) != 8) {
+            is_byte_aligned = false;
+        }
+
+        check_pending_stubs();
+    }
+
+    comment("done");
+    mov_arg(Dst, TMP_MEM1q);
+}
+
 /*
  * Here follows the bs_match instruction and friends.
  */
